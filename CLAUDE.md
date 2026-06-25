@@ -19,7 +19,7 @@
 - 네이티브 코인 서비스는 `AssetService` 인터페이스를 구현한다. (ethereum-common, sol, xlm, btc, bch, trx, xrp, xpla)
 - 토큰 서비스는 `TokenService` 인터페이스를 구현한다. (ethereum-token-common, spl, trc20)
 - **스캔 계약은 `AssetService`/`TokenService` 인터페이스가 강제한다**: `getAssetId()`/`getTokenTypeId()`(숫자 id) + symbol + scanIntervalMs + scanTransactions. 별도 `Scannable` 추상화를 두지 않는다 — 여기 자산은 모두 스캔 대상이므로 인터페이스 자체가 계약이다. `ScanRunner` 는 `AssetService | TokenService` 합집합을 받는다.
-- **식별은 숫자 id 가 1차 키**다. `blockchain/constants.ts` 의 `AssetId`(자산)/`TokenTypeId`(토큰) **단일 enum** 이 전 체인을 커버한다(심볼 문자열 매핑 금지). 각 서비스는 `getAssetId()`/`getTokenTypeId()` 로 자기 id 를 노출하고, `BlockchainService` 는 그 값을 키로 `Map<number, …>` 에 등록·조회한다(`getAssetService(assetId)` / `getTokenService(tokenTypeId)`). symbol 은 로깅·지갑 조회용 보조값. NOTE: id 값은 실제 DB 의 assetId/tokenTypeId 와 일치시킬 예정.
+- **식별은 숫자 id 가 1차 키**다. `blockchain/constants.ts` 의 `AssetId`(자산)/`TokenTypeId`(토큰) **단일 enum** 이 전 체인을 커버한다(심볼 문자열 매핑 금지). 각 서비스는 `getAssetId()`/`getTokenTypeId()` 로 자기 id 를 노출하고, `BlockchainService` 는 그 값을 키로 `Map<number, …>` 에 등록·조회한다(`getAssetService(assetId)` / `getTokenService(tokenTypeId)`). symbol 은 로깅용 보조값(지갑/저장 조회도 id 기준). NOTE: id 값은 실제 DB 의 assetId/tokenTypeId 와 일치시킬 예정.
 - 노드 미설정 경고는 서비스마다 따로 만들지 말고 **`node-config.ts` 의 `warnMissingNode(logger, envKey)` 공용 헬퍼**를 쓴다(envKey 별 1회 경고). 과거의 서비스별 `warnNoNode`/`warnIfNoNode` + `warnedNoNode` 플래그 보일러플레이트는 제거됨.
 - 새 체인/토큰 추가 시:
   1. `src/modules/blockchain/<chain>/` 에 `<chain>.module.ts` + `<chain>.service.ts` 생성 (해당 인터페이스 implements).
@@ -78,6 +78,7 @@
 - "되는 것처럼" 말하지 않는다. 빌드/실행으로 확인한 사실만 보고한다.
 
 ## 5. 도메인 메모
-- 스캔 대상 주소 = hotwallet / coldwallet (`WalletType.HOT` / `COLD`), 실제로는 DB 에서 조회.
+- 스캔 대상 주소는 실제로는 DB 에서 조회한다. `Wallet` 은 `{ assetIds:number[], addresses:string[] }` — 식별은 **숫자 assetId**(symbol/HOT·COLD 구분 없음, 감지할 주소면 hot/cold/기타 무관). EVM 동일 주소가 여러 체인을 커버하므로 `assetIds` 는 배열.
+- 주소/저장 조회 기준은 **`ScanTarget { assetId?, tokenTypeId? }`**(symbol 아님). `WalletService.getScanAddresses(target)` 는 target → assetId 목록으로 해석(토큰이면 기반 assetId 들 조회, 둘 다면 합집합) 후 주소를 모은다. `TxRepository.saveMany(target, txs)` 도 동일 기준.
 - tx-scanner 의 책임: 대상 주소의 **모든 in/out tx 를 감지하여 저장**. 자산(AssetService) + 토큰(TokenService) 모두 대상.
 - 자산별 특성: EVM=nonce/계정·블록범위, BTC/BCH=UTXO, XLM=memoId 입금 식별, SOL/SPL=mintAddress·빠른 signature 스캔. 이 차이를 blockchain 서비스가 캡슐화한다.

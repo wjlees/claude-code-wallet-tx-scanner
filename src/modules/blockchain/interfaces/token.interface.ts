@@ -8,7 +8,7 @@ export interface TokenService {
   /** 토큰 타입 식별 번호 (`TokenTypeId`). 서비스 매핑·식별의 1차 키. */
   getTokenTypeId(): number;
 
-  /** 토큰이 속한 체인/토큰 식별 심볼 (로깅·지갑 조회용) */
+  /** 토큰이 속한 체인/토큰 식별 심볼 (로깅용 보조값) */
   readonly symbol: string;
 
   /** 이 토큰을 스캔할 권장 폴링 간격(ms). */

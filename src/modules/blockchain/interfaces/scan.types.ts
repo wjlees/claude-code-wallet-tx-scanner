@@ -1,3 +1,16 @@
+/**
+ * 스캔 대상 식별 (자산/토큰). 심볼 문자열이 아니라 **숫자 id** 가 기준이다.
+ * assetId / tokenTypeId 중 **최소 하나**는 있어야 한다.
+ * - assetId 만: 네이티브 자산 스캔
+ * - tokenTypeId 만: 토큰 스캔
+ * - 둘 다: 한 번의 스캔으로 자산+토큰을 함께 감지하는 통합 대상(예: SOL ownerAddress +
+ *   SPL ATA 를 동시에). 현재는 단일 식별만 사용하고, 통합은 추후 지원 여지를 위해 열어둠.
+ */
+export interface ScanTarget {
+  assetId?: number;
+  tokenTypeId?: number;
+}
+
 /** 스캔으로 감지된 트랜잭션 (자산 공통 표현) */
 export interface DetectedTx {
   /** 트랜잭션 해시/식별자 (체인에서 유일) */

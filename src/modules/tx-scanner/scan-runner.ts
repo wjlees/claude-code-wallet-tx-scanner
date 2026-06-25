@@ -1,19 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
-import { DetectedTx } from '../blockchain/interfaces/scan.types';
-
-/**
- * 스캔 대상 식별자. assetId / tokenTypeId 중 **최소 하나**는 있어야 한다.
- * - assetId 만: 네이티브 자산 스캔
- * - tokenTypeId 만: 토큰 스캔
- * - 둘 다: 한 번의 스캔으로 자산+토큰을 함께 감지하는 통합 러너(예: SOL ownerAddress +
- *   SPL ATA 를 동시에). 현재는 단일 식별만 사용하고, 통합은 추후 지원 여지를 위해 열어둠.
- */
-export interface ScanTarget {
-  assetId?: number;
-  tokenTypeId?: number;
-}
+import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
 
 /**
  * 한 자산(또는 토큰)에 대한 **독립 무한 스캔 루프**.
@@ -39,7 +27,8 @@ export class ScanRunner {
     // 인터페이스가 이미 강제한다. 별도 Scannable 추상화 없이 둘의 합집합을 받는다.
     private readonly service: AssetService | TokenService,
     private readonly getAddresses: () => Promise<string[]>,
-    private readonly save: (symbol: string, txs: DetectedTx[]) => Promise<void>,
+    // 저장 대상 식별(assetId/tokenTypeId)은 tx-scanner 가 콜백에 바인딩한다.
+    private readonly save: (txs: DetectedTx[]) => Promise<void>,
     // cursor 영속화 콜백(저장소는 tx-scanner 가 주입). 시작 시 load, 사이클마다 save.
     private readonly loadCursor: () => Promise<string | null>,
     private readonly saveCursor: (cursor: string | null) => Promise<void>,
@@ -115,7 +104,7 @@ export class ScanRunner {
           this.cursor,
         );
         if (txs.length > 0) {
-          await this.save(this.service.symbol, txs);
+          await this.save(txs);
         }
         if (nextCursor !== this.cursor) {
           this.cursor = nextCursor;

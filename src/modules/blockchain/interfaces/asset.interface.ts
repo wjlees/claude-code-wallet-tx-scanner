@@ -12,7 +12,7 @@ export interface AssetService {
   /** 자산 식별 번호 (`AssetId`). 서비스 매핑·식별의 1차 키. */
   getAssetId(): number;
 
-  /** 체인/네트워크를 식별하는 심볼 (로깅·지갑 조회용) */
+  /** 체인/네트워크를 식별하는 심볼 (로깅용 보조값) */
   readonly symbol: string;
 
   /**

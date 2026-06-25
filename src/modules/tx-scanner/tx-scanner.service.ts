@@ -9,10 +9,11 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
+import { ScanTarget } from '../blockchain/interfaces/scan.types';
 import { WalletService } from '../wallet/wallet.service';
 import { CURSOR_STORE, CursorStore } from './cursor-store';
 import { TxRepository } from './tx.repository';
-import { ScanRunner, ScanTarget } from './scan-runner';
+import { ScanRunner } from './scan-runner';
 
 /** ScanTarget → cursor 저장 키 (assetId/tokenTypeId 기반, 심볼과 무관하게 안정적). */
 function cursorKey(target: ScanTarget): string {
@@ -79,8 +80,8 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     return new ScanRunner(
       target,
       service,
-      () => this.wallets.getScanAddresses(service.symbol),
-      (symbol, txs) => this.txRepository.saveMany(symbol, txs),
+      () => this.wallets.getScanAddresses(target),
+      (txs) => this.txRepository.saveMany(target, txs),
       () => this.cursorStore.load(key),
       (cursor) => this.cursorStore.save(key, cursor),
       this.logger,

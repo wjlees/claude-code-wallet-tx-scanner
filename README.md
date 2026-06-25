@@ -64,8 +64,8 @@ src/
     │   └── trc20/                    # TokenService. TrxModule import → TrxService(tronweb) 재사용. transfer 디코드
     ├── wallet/                      # 스캔 대상 지갑 제공 (DB 껍데기)
     │   ├── wallet.module.ts
-    │   ├── wallet.service.ts         # getWallets() / getScanAddresses(symbol) — 현재 고정 stub
-    │   └── wallet.types.ts           # Wallet, WalletType(HOT/COLD)
+    │   ├── wallet.service.ts         # getScanAddresses(ScanTarget)→assetIds 해석→주소. 현재 고정 stub
+    │   └── wallet.types.ts           # Wallet { assetIds:number[], addresses:string[] }
     └── tx-scanner/                  # 핵심: 무한 루프 주체 + tx 감지 + 저장
         ├── tx-scanner.module.ts      # BlockchainModule + WalletModule import, CURSOR_STORE provider
         ├── tx-scanner.service.ts     # 대상별 ScanRunner 생성/구동 + @Cron 워치독 (cursorKey)
@@ -84,9 +84,9 @@ TxScannerService.onModuleInit()
   → 서비스마다 ScanRunner 1개 생성 후 start()   # 대상별 독립 무한 루프
        루프 시작: cursor = CursorStore.load(key)            # 마지막 지점부터 resume
        각 루프 반복:
-         → WalletService.getScanAddresses(symbol)            # 대상 주소 (DB 껍데기)
+         → WalletService.getScanAddresses(target)            # target→assetIds→주소 (DB 껍데기)
          → service.scanTransactions(addresses, cursor)       # 자산별 방식으로 in/out 감지
-         → TxRepository.saveMany(symbol, detectedTxs)        # 저장 (DB 껍데기)
+         → TxRepository.saveMany(target, detectedTxs)        # 저장 (id 기준, DB 껍데기)
          → cursor = nextCursor; CursorStore.save(key, cursor) # 진행 지점 영속화(JSON stub)
          → service.scanIntervalMs 만큼 대기
   @Cron(EVERY_MINUTE) watchdog()  # 죽은/정체된 루프 점검·재시작 (스캔은 안 함)
@@ -175,7 +175,7 @@ TxScannerService.onModuleInit()
 - **TokenService** (`interfaces/token.interface.ts`): 토큰용. `symbol`, `scanIntervalMs`, `scanTransactions(addresses, cursor)`, `getTokenBalance`, `getTokenMetadata`.
   - 구현: `ethereum-token-common`, `spl`, `trc20`
 - 계약(`getAssetId()`/`getTokenTypeId()` + symbol + scanIntervalMs + scanTransactions)은 위 두 인터페이스가 강제한다(별도 `Scannable` 추상화 없음). `ScanRunner` 는 `AssetService | TokenService` 합집합을 받는다.
-- 식별은 **숫자 id**([`constants.ts`](./src/modules/blockchain/constants.ts) 의 `AssetId`/`TokenTypeId`)가 1차 키. symbol 은 로깅·지갑 조회용 보조값.
+- 식별은 **숫자 id**([`constants.ts`](./src/modules/blockchain/constants.ts) 의 `AssetId`/`TokenTypeId`)가 1차 키. symbol 은 로깅용 보조값(지갑/저장 조회도 id 기준).
 - **BlockchainService**: 숫자 id 로 구현체를 조회하는 진입점.
   - `getAssetService(assetId)` / `getTokenService(tokenTypeId)` / `getAllAssetServices()` / `getAllTokenServices()`
   - `getSupportedAssetIds()` → `[1..11]` (ETH=1,POL=2,KLAY=3,KONET=4,SOL=5,XLM=6,BTC=7,BCH=8,TRX=9,XRP=10,XPLA=11)
@@ -262,5 +262,6 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 - **2026-06-23**: **스캔 아키텍처 확정 및 구현**. (1) blockchain 인터페이스에 `scanTransactions(addresses, cursor)` + `scanIntervalMs` 추가, 전 자산이 자산별 방식으로 구현(EVM/BTC 블록범위, SOL/SPL signature, XLM Horizon+memoId). EVM 의 in-service 루프 제거. (2) **무한 루프 주체를 tx-scanner 로 이전** — 자산별 `ScanRunner` 독립 루프 + `@Cron` 워치독(`@nestjs/schedule`). (3) `ScheduleModule.forRoot()` 추가. 부팅 검증: 11개 독립 루프(자산8+토큰3) 각자 cadence 로 스캔, 종료 시 전부 graceful stop.
 - **2026-06-23**: **각 blockchain 모듈 실제 노드 SDK 연동**. EVM=web3, SOL/SPL=@solana/web3.js, XLM=@stellar/stellar-sdk(Horizon), BTC/BCH=bitcoind JSON-RPC(공용 `UtxoRpcScanner`). 노드 URL 은 env(`node-config.ts`), 미설정 시 skip. DB 는 의도적으로 stub 유지. ESM 충돌로 stellar-sdk 12 고정 + `rpc-websockets`/uuid override. live 공개 노드로 ETH(블록 25378446)/SOL(slot 428318509)/XLM(ledger 63157898) 동작 확인.
 - **2026-06-25**: **리팩터링 + 신규 체인 4종**. (1) BTC/BCH 공용 로직을 `utxo-common` 모듈로 이동(`UtxoCommonService` 무상태 엔진 + `UtxoRpcClient`), btc/bch 는 주입받아 위임하는 얇은 서비스로. 루트의 `utxo-rpc.scanner.ts` 단발 파일 제거. (2) 중복 `ScannableService` 제거 → `ScanRunner` 가 `AssetService | TokenService` 사용(계약은 인터페이스가 강제). (3) 서비스별 `warnNoNode`/`warnIfNoNode` 보일러플레이트를 `node-config.ts` 공용 `warnMissingNode` 로 통합. (4) **신규 자산 trx/xrp/xpla + 토큰 trc20 추가** — TRX/TRC20=tronweb, XRP=rippled JSON-RPC(fetch, `xrpl` SDK 는 `@noble/hashes@2` ESM 충돌로 미사용), XPLA=@xpla/xpla.js(Cosmos LCD). (5) `dotenv` 도입(`.env` 로드) + 공개 노드 URL 채움. 검증: 자산11+토큰4 부팅·graceful stop, live 노드로 ETH/POL/KLAY/KONET/SOL/XLM/TRX/XRP/XPLA getBlockHeight, XRP account_tx 실제 tx 파싱 확인. BTC·BCH 만 공개 노드 없어 skip.
+- **2026-06-25**: **지갑/저장도 숫자 id 기준으로 통일**. `ScanTarget` 을 `blockchain/interfaces/scan.types.ts` 공용 타입으로 이동(중복 제거). `WalletService.getScanAddresses(symbol)` → `getScanAddresses(target: ScanTarget)`: target → assetId 목록 해석(토큰이면 기반 assetId 들, 둘 다면 합집합) 후 주소 수집. `Wallet` 타입 재설계 — `{ assetIds:number[], addresses:string[] }`(symbol·`WalletType`(HOT/COLD)·단일 address·string id 제거). `TxRepository.saveMany(symbol,…)` → `saveMany(target,…)`. 검증: tokenTypeId 1/2/3/4 → assetIds [1]/[3]/[5]/[9]; EVM assetId 는 2개 주소, 비EVM 은 0개(이전 stub 주소 형식 에러 해소).
 - **2026-06-25**: **cursor 영속화 + 파라미터 스토어**. (1) `CursorStore` 도입(`tx-scanner/cursor-store.ts`) — `JsonCursorStore` 가 `.data/cursors.json` 에 대상별 cursor 저장. `ScanRunner` 가 시작 시 `load`(resume), 사이클마다 `save`. key=`asset:<id>`/`token:<id>`. `CURSOR_STORE` 토큰 주입, DB 교체 대비 인터페이스 유지. 검증: 5초 스캔 후 cursors.json 기록 → 재시작 시 `resume from cursor=…` 확인. (2) 노드 URL 조회를 `parameter-store.ts`(async `getParameter`/`getNodeUrl`)로 이전 — 소스 `parameter.json`(gitignore)→env 폴백, `node-config.ts` 는 `warnMissingNode` 만 남김. 전 서비스 `resolveNodeUrl`/UtxoCommonService 가 await 조회. 검증: parameter.json 값이 env 보다 우선함 확인.
 - **2026-06-25**: **식별자 숫자화 + 서비스 구조 통일**. (1) `constants.ts` 단일 소스(`AssetId` 1~11 / `TokenTypeId` 1~4) 도입 — EVM 전용 `EthereumBasedAssetId`/`TokenTypeId` 제거하고 전 체인을 한 enum 으로. `AssetService.getAssetId()` / `TokenService.getTokenTypeId()` 를 인터페이스 계약으로 추가. `BlockchainService` 를 **`Map<number,…>`(id 키)** 로 전환(`getAssetService(assetId)`/`getTokenService(tokenTypeId)`, `getSupportedAssetIds`/`getSupportedTokenTypeIds`). (2) **state+onModuleInit 패턴을 전 노드핸들 서비스로 확산**(sol/xlm/trx/xrp/xpla/spl: 핸들을 onModuleInit 에서 async URL 로 초기화, 런타임 상태는 `state` 에; ethereum-token-common 도 state 그룹화). (3) `ScanRunner` 의 `kind:'asset'|'token'` → **`ScanTarget {assetId?, tokenTypeId?}`**(둘 중 최소 1개 필수, 없으면 throw; 둘 다 = SOL+SPL 같은 통합 스캔 여지). 검증: 부팅 시 전 핸들 onModuleInit 초기화 + 러너 라벨 `asset#1:ETH`…`token#1:erc20`, id 조회/에러 경로 확인.
