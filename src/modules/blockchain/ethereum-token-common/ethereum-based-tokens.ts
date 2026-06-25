@@ -1,5 +1,5 @@
+import { AssetId, TokenTypeId } from '../constants';
 import {
-  EthereumBasedAssetId,
   EthereumBasedAssetType,
   ethereumBasedAssets,
 } from '../ethereum-common/ethereum-based-assets';
@@ -11,33 +11,24 @@ import {
  * `...ethereumBasedAssets[baseAssetId]` 를 스프레드하고, 토큰 고유 정보만 덧붙인다.
  */
 export interface EthereumBasedTokenType extends EthereumBasedAssetType {
-  /** 이 토큰이 올라가 있는 EVM 자산 id (ethereum-based-assets 의 assetId) */
+  /** 이 토큰이 올라가 있는 EVM 자산 id (`AssetId`) */
   baseAssetId: number;
   /** 토큰 이름 (paramStore 조회 등에 사용) */
   tokenName: string;
 }
 
 /**
- * 토큰 타입 id (숫자).
- * NOTE: 값은 잠정값 — 실제로는 DB 의 tokenType id 와 일치시켜야 한다(TODO).
- */
-export enum TokenTypeId {
-  ERC20 = 1001,
-  KIP7 = 1002,
-}
-
-/**
- * EVM 계열 토큰 레지스트리. (키 = 숫자 tokenTypeId)
+ * EVM 계열 토큰 레지스트리. (키 = `TokenTypeId` 의 EVM 부분집합)
  */
 export const ethereumBasedTokens: Record<number, EthereumBasedTokenType> = {
   [TokenTypeId.ERC20]: {
-    ...ethereumBasedAssets[EthereumBasedAssetId.ETH],
-    baseAssetId: EthereumBasedAssetId.ETH,
+    ...ethereumBasedAssets[AssetId.ETH],
+    baseAssetId: AssetId.ETH,
     tokenName: 'erc20',
   },
   [TokenTypeId.KIP7]: {
-    ...ethereumBasedAssets[EthereumBasedAssetId.KLAY],
-    baseAssetId: EthereumBasedAssetId.KLAY,
+    ...ethereumBasedAssets[AssetId.KLAY],
+    baseAssetId: AssetId.KLAY,
     tokenName: 'kip7',
   },
 };

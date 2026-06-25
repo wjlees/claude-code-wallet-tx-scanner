@@ -1,36 +1,59 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import Web3 from 'web3';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
-import { getEvmNodeUrl } from '../node-config';
+import { warnMissingNode } from '../node-config';
+import { getNodeUrl } from '../parameter-store';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
 } from './ethereum-based-assets';
 
+/** 이 인스턴스가 도는 동안 유지하는 런타임 상태 (네트워크 설정 + 노드 핸들). */
+interface EthereumCommonState {
+  config: EthereumBasedAssetType;
+  /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
+  web3?: Web3;
+}
+
 /**
  * 하나의 EVM 네트워크(assetId 단위: ETH / POLYGON / KLAY / KONET ...)를 담당.
  *
- * 노드: web3 (네트워크별 *_NODE_URL env). 노드 미설정 시 스캔 skip.
+ * 노드: web3 (네트워크별 *_NODE_URL). 노드 핸들은 `onModuleInit` 에서 초기화한다 —
+ *       URL 조회를 async 로 두어(지금은 env, 추후 DB/원격 설정 가능) await 할 수 있게.
  * 스캔: cursor=마지막 스캔 블록번호. cursor 다음 블록부터 head 까지 블록을 받아
  *       tx.from/to 가 대상 주소면 DetectedTx(in/out) 로 수집.
  */
-export class EthereumCommonService implements AssetService {
-  private readonly config: EthereumBasedAssetType;
+export class EthereumCommonService implements AssetService, OnModuleInit {
   private readonly logger: Logger;
-  private readonly web3?: Web3;
-  private warnedNoNode = false;
+  /** 런타임 상태는 흩뿌리지 말고 한곳(state)에 모은다. */
+  private readonly state: EthereumCommonState;
 
   readonly scanIntervalMs = 2000;
   private readonly batchSize = 1000;
 
   constructor(private readonly assetId: number) {
-    this.config = ethereumBasedAssets[assetId];
-    this.logger = new Logger(`EthereumCommonService:${this.config.assetName}`);
-    const url = getEvmNodeUrl(this.config.networkName);
+    const config = ethereumBasedAssets[assetId];
+    this.state = { config };
+    this.logger = new Logger(`EthereumCommonService:${config.assetName}`);
+  }
+
+  /** 노드 핸들(web3) 초기화. URL 조회가 async 라서 생성자가 아닌 여기서 await 한다. */
+  async onModuleInit(): Promise<void> {
+    const url = await this.resolveNodeUrl();
     if (url) {
-      this.web3 = new Web3(url);
+      this.state.web3 = new Web3(url);
+      this.logger.log(`web3 initialized @ ${this.networkName}`);
     }
+  }
+
+  /** 노드 URL 조회. parameter.json(→env) 에서 async 로 가져온다(추후 DB/원격 설정 교체 가능). */
+  private async resolveNodeUrl(): Promise<string | undefined> {
+    return getNodeUrl(this.state.config.networkName);
+  }
+
+  private get nodeEnvKey(): string {
+    return `${this.networkName.toUpperCase()}_NODE_URL`;
   }
 
   getAssetId(): number {
@@ -38,24 +61,25 @@ export class EthereumCommonService implements AssetService {
   }
 
   get symbol(): string {
-    return this.config.assetName;
+    return this.state.config.assetName;
   }
 
   get networkName(): string {
-    return this.config.networkName;
+    return this.state.config.networkName;
   }
 
   /** 토큰 서비스(ethereum-token-common)가 같은 노드를 재사용하도록 노출. */
   getWeb3(): Web3 | undefined {
-    return this.web3;
+    return this.state.web3;
   }
 
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    if (!this.web3) {
-      this.warnNoNode();
+    const { web3 } = this.state;
+    if (!web3) {
+      warnMissingNode(this.logger, this.nodeEnvKey);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -71,7 +95,7 @@ export class EthereumCommonService implements AssetService {
     const txs: DetectedTx[] = [];
 
     for (let n = from; n <= to; n++) {
-      const block = await this.web3.eth.getBlock(n, true);
+      const block = await web3.eth.getBlock(n, true);
       const blockTxs = (block?.transactions ?? []) as any[];
       for (const tx of blockTxs) {
         if (typeof tx === 'string') continue; // hydrated=true 면 객체여야 함
@@ -109,28 +133,21 @@ export class EthereumCommonService implements AssetService {
   }
 
   async getBalance(address: string): Promise<string> {
-    if (!this.web3) {
-      this.warnNoNode();
+    const { web3 } = this.state;
+    if (!web3) {
+      warnMissingNode(this.logger, this.nodeEnvKey);
       return '0';
     }
-    const wei = await this.web3.eth.getBalance(address);
+    const wei = await web3.eth.getBalance(address);
     return wei.toString();
   }
 
   async getBlockHeight(): Promise<number> {
-    if (!this.web3) {
-      this.warnNoNode();
+    const { web3 } = this.state;
+    if (!web3) {
+      warnMissingNode(this.logger, this.nodeEnvKey);
       return 0;
     }
-    return Number(await this.web3.eth.getBlockNumber());
-  }
-
-  private warnNoNode(): void {
-    if (!this.warnedNoNode) {
-      this.logger.warn(
-        `no node URL (${this.config.networkName.toUpperCase()}_NODE_URL) — scan skipped`,
-      );
-      this.warnedNoNode = true;
-    }
+    return Number(await web3.eth.getBlockNumber());
   }
 }

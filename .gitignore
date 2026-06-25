@@ -1,5 +1,12 @@
 node_modules
 dist
+.DS_Store
+
+# 로컬 파라미터(노드 URL 등) — 실제 값. 템플릿은 parameter.example.json
+parameter.json
+# cursor 영속화 stub (DB 대체) 저장 위치
+.data/
+
 .env
 .env.local
 .env.development.local

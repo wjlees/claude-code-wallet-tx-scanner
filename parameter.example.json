@@ -1,0 +1,14 @@
+{
+  "ETHEREUM_NODE_URL": "",
+  "POLYGON_NODE_URL": "",
+  "KLAYTN_NODE_URL": "",
+  "KONET_NODE_URL": "",
+  "SOLANA_RPC_URL": "",
+  "STELLAR_HORIZON_URL": "",
+  "BITCOIN_RPC_URL": "http://user:pass@host:8332",
+  "BCH_RPC_URL": "http://user:pass@host:8332",
+  "TRON_RPC_URL": "https://api.trongrid.io",
+  "XRP_RPC_URL": "https://s1.ripple.com:51234",
+  "XPLA_LCD_URL": "https://dimension-lcd.xpla.dev",
+  "XPLA_CHAIN_ID": "dimension_37-1"
+}

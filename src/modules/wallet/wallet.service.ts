@@ -28,7 +28,9 @@ export class WalletService {
 
   /** 전체 스캔 대상 지갑 목록 */
   async getWallets(): Promise<Wallet[]> {
-    console.log('[WalletService] getWallets() - returning stub wallets (DB not wired yet)');
+    console.log(
+      '[WalletService] getWallets() - returning stub wallets (DB not wired yet)',
+    );
     return this.stubWallets;
   }
 
@@ -38,7 +40,9 @@ export class WalletService {
    * 실제로는 해당 체인의 hot/cold 주소만 골라 반환해야 한다.
    */
   async getScanAddresses(symbol: string): Promise<string[]> {
-    console.log(`[WalletService] getScanAddresses(${symbol}) - stub (fixed addresses)`);
+    console.log(
+      `[WalletService] getScanAddresses(${symbol}) - stub (fixed addresses)`,
+    );
     return this.stubWallets.map((w) => w.address);
   }
 

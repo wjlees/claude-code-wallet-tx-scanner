@@ -1,39 +1,59 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Connection, PublicKey } from '@solana/web3.js';
+import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
-import { getEnv } from '../node-config';
+import { warnMissingNode } from '../node-config';
+import { getParameter } from '../parameter-store';
+
+const SOLANA_RPC_ENV = 'SOLANA_RPC_URL';
+
+/** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
+interface SolState {
+  /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
+  connection?: Connection;
+}
 
 /**
  * Solana 네이티브(SOL).
  *
- * 노드: @solana/web3.js Connection (SOLANA_RPC_URL). 빠른 스캔 요구 → 짧은 간격.
+ * 노드: @solana/web3.js Connection (SOLANA_RPC_URL). 노드 핸들은 onModuleInit 에서 초기화.
  * 스캔: 블록 순회가 아니라 **주소별 getSignaturesForAddress 페이징**.
  *   cursor=마지막으로 처리한 signature. {until: cursor} 로 그 이후 신규만 가져온다.
  *
  * NOTE: in/out 방향은 tx 를 parse 해야 정확히 안다(잔고 delta). 현재는 signature 수집까지.
  */
 @Injectable()
-export class SolService implements AssetService {
+export class SolService implements AssetService, OnModuleInit {
   readonly symbol = 'sol';
   readonly scanIntervalMs = 500;
   private readonly logger = new Logger('SolService');
-  private readonly connection?: Connection;
-  private warnedNoNode = false;
+  private readonly state: SolState = {};
 
-  constructor() {
-    const url = getEnv('SOLANA_RPC_URL');
+  getAssetId(): number {
+    return AssetId.SOL;
+  }
+
+  async onModuleInit(): Promise<void> {
+    const url = await this.resolveNodeUrl();
     if (url) {
-      this.connection = new Connection(url, 'confirmed');
+      this.state.connection = new Connection(url, 'confirmed');
+      this.logger.log('connection initialized');
     }
+  }
+
+  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  private async resolveNodeUrl(): Promise<string | undefined> {
+    return getParameter(SOLANA_RPC_ENV);
   }
 
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    if (!this.connection) {
-      this.warnNoNode();
+    const { connection } = this.state;
+    if (!connection) {
+      warnMissingNode(this.logger, SOLANA_RPC_ENV);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -41,7 +61,7 @@ export class SolService implements AssetService {
     let newest: string | null = cursor;
 
     for (const address of addresses) {
-      const sigs = await this.connection.getSignaturesForAddress(
+      const sigs = await connection.getSignaturesForAddress(
         new PublicKey(address),
         { until: cursor ?? undefined, limit: 1000 },
       );
@@ -64,26 +84,21 @@ export class SolService implements AssetService {
   }
 
   async getBalance(address: string): Promise<string> {
-    if (!this.connection) {
-      this.warnNoNode();
+    const { connection } = this.state;
+    if (!connection) {
+      warnMissingNode(this.logger, SOLANA_RPC_ENV);
       return '0';
     }
-    const lamports = await this.connection.getBalance(new PublicKey(address));
+    const lamports = await connection.getBalance(new PublicKey(address));
     return String(lamports);
   }
 
   async getBlockHeight(): Promise<number> {
-    if (!this.connection) {
-      this.warnNoNode();
+    const { connection } = this.state;
+    if (!connection) {
+      warnMissingNode(this.logger, SOLANA_RPC_ENV);
       return 0;
     }
-    return this.connection.getSlot();
-  }
-
-  private warnNoNode(): void {
-    if (!this.warnedNoNode) {
-      this.logger.warn('no SOLANA_RPC_URL — scan skipped');
-      this.warnedNoNode = true;
-    }
+    return connection.getSlot();
   }
 }

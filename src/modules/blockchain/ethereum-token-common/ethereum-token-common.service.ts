@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { EthereumCommonService } from '../ethereum-common/ethereum-common.service';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
+import { warnMissingNode } from '../node-config';
 import {
   EthereumBasedTokenType,
   ethereumBasedTokens,
@@ -16,18 +17,23 @@ function toTopic(address: string): string {
   return '0x' + address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
 }
 
+/** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
+interface EthereumTokenCommonState {
+  config: EthereumBasedTokenType;
+  /** 기반 EVM 자산 서비스(노드 web3 재사용). 없으면 스캔 skip. */
+  baseAssetService?: EthereumCommonService;
+}
+
 /**
  * 하나의 토큰 타입(tokenTypeId: ERC20 / KIP7 ...)을 담당.
  *
  * 기반 EVM 자산(baseAssetId)의 `EthereumCommonService` 를 재사용해 같은 노드(web3)로
- * eth_getLogs 를 호출한다. cursor=마지막 스캔 블록번호.
+ * eth_getLogs 를 호출한다(새 노드를 만들지 않음). cursor=마지막 스캔 블록번호.
  * Transfer 이벤트에서 from/to(topic1/topic2)가 대상 주소면 in/out 으로 수집.
  */
 export class EthereumTokenCommonService implements TokenService {
-  private readonly config: EthereumBasedTokenType;
   private readonly logger: Logger;
-  private readonly baseAssetService?: EthereumCommonService;
-  private warnedNoNode = false;
+  private readonly state: EthereumTokenCommonState;
 
   readonly scanIntervalMs = 2000;
   private readonly batchSize = 1000;
@@ -36,16 +42,15 @@ export class EthereumTokenCommonService implements TokenService {
     private readonly tokenTypeId: number,
     ethereumCommonServices: EthereumCommonService[],
   ) {
-    this.config = ethereumBasedTokens[tokenTypeId];
-    this.logger = new Logger(
-      `EthereumTokenCommonService:${this.config.tokenName}`,
+    const config = ethereumBasedTokens[tokenTypeId];
+    const baseAssetService = ethereumCommonServices.find(
+      (s) => s.getAssetId() === config.baseAssetId,
     );
-    this.baseAssetService = ethereumCommonServices.find(
-      (s) => s.getAssetId() === this.config.baseAssetId,
-    );
-    if (!this.baseAssetService) {
+    this.state = { config, baseAssetService };
+    this.logger = new Logger(`EthereumTokenCommonService:${config.tokenName}`);
+    if (!baseAssetService) {
       this.logger.warn(
-        `no base EthereumCommonService for baseAssetId=${this.config.baseAssetId}`,
+        `no base EthereumCommonService for baseAssetId=${config.baseAssetId}`,
       );
     }
   }
@@ -55,24 +60,29 @@ export class EthereumTokenCommonService implements TokenService {
   }
 
   get symbol(): string {
-    return this.config.tokenName;
+    return this.state.config.tokenName;
   }
 
   get networkName(): string {
-    return this.config.networkName;
+    return this.state.config.networkName;
+  }
+
+  private get nodeEnvKey(): string {
+    return `${this.networkName.toUpperCase()}_NODE_URL`;
   }
 
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    const web3 = this.baseAssetService?.getWeb3();
+    const { baseAssetService } = this.state;
+    const web3 = baseAssetService?.getWeb3();
     if (!web3) {
-      this.warnNoNode();
+      warnMissingNode(this.logger, this.nodeEnvKey);
       return { txs: [], nextCursor: cursor };
     }
 
-    const head = await this.baseAssetService!.getBlockHeight();
+    const head = await baseAssetService!.getBlockHeight();
     const from = cursor === null ? head : Number(cursor) + 1;
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
@@ -103,7 +113,7 @@ export class EthereumTokenCommonService implements TokenService {
     }
 
     this.logger.log(
-      `scanned ${this.config.tokenName} logs ${from}~${to} @ ${this.networkName} → ${txs.length} transfer`,
+      `scanned ${this.symbol} logs ${from}~${to} @ ${this.networkName} → ${txs.length} transfer`,
     );
     return { txs, nextCursor: String(to) };
   }
@@ -140,14 +150,5 @@ export class EthereumTokenCommonService implements TokenService {
     // TODO(RPC): name()/symbol()/decimals() eth_call.
     this.logger.log(`getTokenMetadata(${tokenAddress})`);
     return null;
-  }
-
-  private warnNoNode(): void {
-    if (!this.warnedNoNode) {
-      this.logger.warn(
-        `base node not configured (baseAssetId=${this.config.baseAssetId}) — token scan skipped`,
-      );
-      this.warnedNoNode = true;
-    }
   }
 }

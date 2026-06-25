@@ -1,23 +1,20 @@
-import { Logger } from '@nestjs/common';
-import { DetectedTx } from './interfaces/scan.types';
+import { DetectedTx } from '../interfaces/scan.types';
 
 /**
- * BTC/BCH 공용 UTXO 노드 스캐너 (bitcoind 계열 JSON-RPC).
+ * bitcoind 계열 노드(Bitcoin Core / Bitcoin Cash Node)용 저수준 JSON-RPC 클라이언트.
+ *
+ * 노드 1개(=URL 1개)에 대응한다. BTC/BCH 가 각자 자기 노드로 인스턴스를 만든다.
+ * 노드 URL 은 `http://user:pass@host:port` 형태를 지원(자격증명은 Basic 헤더로 변환).
  *
  * Bitcoin Core 는 임의 주소 인덱스가 없으므로, 여기서는 블록을 verbose(2)로 받아
  * **vout 의 수신 주소**가 대상이면 'in' 으로 감지한다.
  * 'out'(우리 UTXO 소비)은 prevout 추적이 필요해 watch-only 지갑(listsinceblock)이 더 적합 → TODO.
- *
- * 노드 URL 은 `http://user:pass@host:port` 형태를 지원(자격증명은 Basic 헤더로 변환).
  */
-export class UtxoRpcScanner {
+export class UtxoRpcClient {
   private readonly endpoint: string;
   private readonly authHeader?: string;
 
-  constructor(
-    rawUrl: string,
-    private readonly logger: Logger,
-  ) {
+  constructor(rawUrl: string) {
     const u = new URL(rawUrl);
     if (u.username || u.password) {
       const token = Buffer.from(

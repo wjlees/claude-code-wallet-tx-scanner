@@ -1,8 +1,10 @@
+import { AssetId } from '../constants';
+
 /**
  * ethereum-common 은 단일 체인이 아니라 "EVM 계열 네트워크들"을 공통 로직으로 처리한다.
  * (ethereum, polygon, klaytn, konet 등) — 네트워크별 차이는 아래 설정으로 표현한다.
  *
- * assetId 는 숫자(실제로는 DB 의 asset id)이며, 토큰(ethereum-based-tokens)이
+ * 레지스트리 키 = `AssetId`(constants.ts) 의 EVM 부분집합. 토큰(ethereum-based-tokens)이
  * baseAssetId 로 이 값을 참조한다.
  */
 export interface EthereumBasedAssetType {
@@ -17,39 +19,28 @@ export interface EthereumBasedAssetType {
 }
 
 /**
- * EVM 계열 자산 id (숫자).
- * NOTE: 값은 잠정값 — 실제로는 DB 의 asset id 와 일치시켜야 한다(TODO).
- */
-export enum EthereumBasedAssetId {
-  ETH = 1,
-  POLYGON = 2,
-  KLAY = 3,
-  KONET = 4,
-}
-
-/**
- * EVM 계열 자산 레지스트리. (키 = 숫자 assetId)
+ * EVM 계열 자산 레지스트리. (키 = `AssetId` 의 EVM 부분집합)
  * NOTE: EIP1559 / hardfork / assetName 값은 네트워크별로 확인 후 확정 필요(TODO).
  */
 export const ethereumBasedAssets: Record<number, EthereumBasedAssetType> = {
-  [EthereumBasedAssetId.ETH]: {
+  [AssetId.ETH]: {
     networkName: 'ethereum',
     EIP1559: true,
     hardfork: 'cancun',
     assetName: 'ETH',
   },
-  [EthereumBasedAssetId.POLYGON]: {
+  [AssetId.POLYGON]: {
     networkName: 'polygon',
     EIP1559: true,
     hardfork: 'london',
     assetName: 'POL',
   },
-  [EthereumBasedAssetId.KLAY]: {
+  [AssetId.KLAY]: {
     networkName: 'klaytn',
     EIP1559: false,
     assetName: 'KLAY',
   },
-  [EthereumBasedAssetId.KONET]: {
+  [AssetId.KONET]: {
     networkName: 'konet',
     EIP1559: false,
     assetName: 'KONET',

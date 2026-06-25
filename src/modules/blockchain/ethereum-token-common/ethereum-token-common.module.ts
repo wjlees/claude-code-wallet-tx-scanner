@@ -10,7 +10,7 @@ import { EthereumTokenCommonService } from './ethereum-token-common.service';
 /** 모든 EVM 토큰 서비스를 배열로 받는 주입 토큰 */
 export const ETHEREUM_TOKEN_COMMON_SERVICES = 'EthereumTokenCommonServices';
 
-/** tokenTypeId 별 개별 서비스 토큰 (`EthereumTokenCommonService_1001` 등) */
+/** tokenTypeId 별 개별 서비스 토큰 (`EthereumTokenCommonService_1` 등) */
 export const ethereumTokenCommonServiceToken = (tokenTypeId: number) =>
   `EthereumTokenCommonService_${tokenTypeId}`;
 

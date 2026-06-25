@@ -9,7 +9,10 @@ import { ScanResult } from './scan.types';
  * "새 자산을 추가하려면 최소한 이건 구현하라"는 계약.
  */
 export interface AssetService {
-  /** 체인/네트워크를 식별하는 심볼 */
+  /** 자산 식별 번호 (`AssetId`). 서비스 매핑·식별의 1차 키. */
+  getAssetId(): number;
+
+  /** 체인/네트워크를 식별하는 심볼 (로깅·지갑 조회용) */
   readonly symbol: string;
 
   /**

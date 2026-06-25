@@ -1,73 +1,49 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { ScanResult } from '../interfaces/scan.types';
-import { getEnv } from '../node-config';
-import { UtxoRpcScanner } from '../utxo-rpc.scanner';
+import {
+  UtxoAssetConfig,
+  UtxoCommonService,
+} from '../utxo-common/utxo-common.service';
 
 /**
  * Bitcoin (BTC). UTXO 모델.
  *
- * 노드: bitcoind JSON-RPC (BITCOIN_RPC_URL = http://user:pass@host:8332).
- * 스캔: cursor=블록 높이. cursor 다음 블록부터 head 까지 vout 수신 매칭(UtxoRpcScanner).
+ * 공용 UTXO 엔진(UtxoCommonService)을 주입받아 자기 설정(BITCOIN_RPC_URL)으로 위임한다.
+ * 스캔 방식 자체는 utxo-common 에 있다(cursor=블록 높이, vout 수신 매칭).
  */
 @Injectable()
 export class BtcService implements AssetService {
-  readonly symbol = 'btc';
+  private readonly cfg: UtxoAssetConfig = {
+    symbol: 'btc',
+    rpcEnvKey: 'BITCOIN_RPC_URL',
+    batchSize: 50,
+  };
   readonly scanIntervalMs = 5000;
-  private readonly batchSize = 50;
-  private readonly logger = new Logger('BtcService');
-  private readonly scanner?: UtxoRpcScanner;
-  private warnedNoNode = false;
 
-  constructor() {
-    const url = getEnv('BITCOIN_RPC_URL');
-    if (url) {
-      this.scanner = new UtxoRpcScanner(url, this.logger);
-    }
+  constructor(private readonly utxo: UtxoCommonService) {}
+
+  getAssetId(): number {
+    return AssetId.BTC;
   }
 
-  async scanTransactions(
+  get symbol(): string {
+    return this.cfg.symbol;
+  }
+
+  scanTransactions(
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    if (!this.scanner) {
-      this.warnNoNode();
-      return { txs: [], nextCursor: cursor };
-    }
-    const head = await this.scanner.getBlockCount();
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
-    }
-    const to = Math.min(from + this.batchSize - 1, head);
-    const txs = await this.scanner.scanRange(from, to, addresses);
-    this.logger.log(`scanned blocks ${from}~${to} (UTXO) → ${txs.length} tx`);
-    return { txs, nextCursor: String(to) };
+    return this.utxo.scanTransactions(this.cfg, addresses, cursor);
   }
 
-  async getBalance(address: string): Promise<string> {
-    this.warnIfNoNode();
-    // TODO(RPC): watch-only 지갑 잔고 또는 인덱서 사용.
-    this.logger.log(`getBalance(${address})`);
-    return '0';
+  getBalance(address: string): Promise<string> {
+    return this.utxo.getBalance(this.cfg, address);
   }
 
-  async getBlockHeight(): Promise<number> {
-    if (!this.scanner) {
-      this.warnNoNode();
-      return 0;
-    }
-    return this.scanner.getBlockCount();
-  }
-
-  private warnIfNoNode(): void {
-    if (!this.scanner) this.warnNoNode();
-  }
-
-  private warnNoNode(): void {
-    if (!this.warnedNoNode) {
-      this.logger.warn('no BITCOIN_RPC_URL — scan skipped');
-      this.warnedNoNode = true;
-    }
+  getBlockHeight(): Promise<number> {
+    return this.utxo.getBlockHeight(this.cfg);
   }
 }

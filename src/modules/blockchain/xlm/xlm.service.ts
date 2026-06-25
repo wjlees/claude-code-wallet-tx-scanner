@@ -1,37 +1,58 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Horizon } from '@stellar/stellar-sdk';
+import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
-import { getEnv } from '../node-config';
+import { warnMissingNode } from '../node-config';
+import { getParameter } from '../parameter-store';
+
+const STELLAR_HORIZON_ENV = 'STELLAR_HORIZON_URL';
+
+/** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
+interface XlmState {
+  /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
+  server?: Horizon.Server;
+}
 
 /**
  * Stellar (XLM).
  *
- * 노드: Horizon (STELLAR_HORIZON_URL). 단일 입금 주소 + **memoId** 로 입금 주체 식별.
+ * 노드: Horizon (STELLAR_HORIZON_URL). 핸들은 onModuleInit 에서 초기화.
+ *   단일 입금 주소 + **memoId** 로 입금 주체 식별.
  * 스캔: Horizon `/accounts/{addr}/transactions` 를 paging_token(cursor) 기준으로 페이징.
  *   tx.memo 를 memoId 로, source_account 로 in/out 판별.
  */
 @Injectable()
-export class XlmService implements AssetService {
+export class XlmService implements AssetService, OnModuleInit {
   readonly symbol = 'xlm';
   readonly scanIntervalMs = 1000;
   private readonly logger = new Logger('XlmService');
-  private readonly server?: Horizon.Server;
-  private warnedNoNode = false;
+  private readonly state: XlmState = {};
 
-  constructor() {
-    const url = getEnv('STELLAR_HORIZON_URL');
+  getAssetId(): number {
+    return AssetId.XLM;
+  }
+
+  async onModuleInit(): Promise<void> {
+    const url = await this.resolveNodeUrl();
     if (url) {
-      this.server = new Horizon.Server(url);
+      this.state.server = new Horizon.Server(url);
+      this.logger.log('Horizon server initialized');
     }
+  }
+
+  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  private async resolveNodeUrl(): Promise<string | undefined> {
+    return getParameter(STELLAR_HORIZON_ENV);
   }
 
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    if (!this.server) {
-      this.warnNoNode();
+    const { server } = this.state;
+    if (!server) {
+      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -39,7 +60,7 @@ export class XlmService implements AssetService {
     let nextCursor: string | null = cursor;
 
     for (const address of addresses) {
-      const page = await this.server
+      const page = await server
         .transactions()
         .forAccount(address)
         .cursor(cursor ?? '')
@@ -54,7 +75,9 @@ export class XlmService implements AssetService {
           direction: record.source_account === address ? 'out' : 'in',
           address,
           counterparty:
-            record.source_account === address ? undefined : record.source_account,
+            record.source_account === address
+              ? undefined
+              : record.source_account,
           memoId: (record as any).memo,
           raw: record,
         });
@@ -66,28 +89,23 @@ export class XlmService implements AssetService {
   }
 
   async getBalance(address: string): Promise<string> {
-    if (!this.server) {
-      this.warnNoNode();
+    const { server } = this.state;
+    if (!server) {
+      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
       return '0';
     }
-    const account = await this.server.loadAccount(address);
+    const account = await server.loadAccount(address);
     const native = account.balances.find((b: any) => b.asset_type === 'native');
     return native ? (native as any).balance : '0';
   }
 
   async getBlockHeight(): Promise<number> {
-    if (!this.server) {
-      this.warnNoNode();
+    const { server } = this.state;
+    if (!server) {
+      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
       return 0;
     }
-    const latest = await this.server.ledgers().order('desc').limit(1).call();
+    const latest = await server.ledgers().order('desc').limit(1).call();
     return latest.records[0]?.sequence ?? 0;
-  }
-
-  private warnNoNode(): void {
-    if (!this.warnedNoNode) {
-      this.logger.warn('no STELLAR_HORIZON_URL — scan skipped');
-      this.warnedNoNode = true;
-    }
   }
 }

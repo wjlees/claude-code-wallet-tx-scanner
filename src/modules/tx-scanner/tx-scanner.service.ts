@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -6,9 +7,22 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { BlockchainService } from '../blockchain/blockchain.service';
+import { AssetService } from '../blockchain/interfaces/asset.interface';
+import { TokenService } from '../blockchain/interfaces/token.interface';
 import { WalletService } from '../wallet/wallet.service';
+import { CURSOR_STORE, CursorStore } from './cursor-store';
 import { TxRepository } from './tx.repository';
-import { ScanRunner } from './scan-runner';
+import { ScanRunner, ScanTarget } from './scan-runner';
+
+/** ScanTarget → cursor 저장 키 (assetId/tokenTypeId 기반, 심볼과 무관하게 안정적). */
+function cursorKey(target: ScanTarget): string {
+  const parts: string[] = [];
+  if (target.assetId !== undefined) parts.push(`asset:${target.assetId}`);
+  if (target.tokenTypeId !== undefined) {
+    parts.push(`token:${target.tokenTypeId}`);
+  }
+  return parts.join('+');
+}
 
 /**
  * 대상 주소(hot/cold)의 모든 in/out tx 를 감지하여 저장하는 스캐너.
@@ -19,7 +33,8 @@ import { ScanRunner } from './scan-runner';
  *  - 무한 루프는 실시간성이 높지만 프로세스가 죽거나 루프가 멈추면 조용히 정지할 수 있다.
  *    그래서 cron 워치독이 주기적으로 각 루프의 생존/정체를 점검하고 필요 시 재시작한다.
  *    (워치독은 스캔 자체는 하지 않는다)
- *  - 각 루프는 cursor 를 영속화(예정)하므로 재시작 후 마지막 지점부터 이어서 스캔한다(at-least-once).
+ *  - 각 루프는 cursor 를 `CursorStore`(JSON 파일 stub)에 영속화하므로 재시작/재가동 후
+ *    마지막 지점부터 이어서 스캔한다(at-least-once).
  */
 @Injectable()
 export class TxScannerService implements OnModuleInit, OnModuleDestroy {
@@ -30,6 +45,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     private readonly blockchain: BlockchainService,
     private readonly wallets: WalletService,
     private readonly txRepository: TxRepository,
+    @Inject(CURSOR_STORE) private readonly cursorStore: CursorStore,
   ) {}
 
   onModuleInit(): void {
@@ -37,10 +53,14 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     const tokenServices = this.blockchain.getAllTokenServices();
 
     for (const service of assetServices) {
-      this.runners.push(this.createRunner('asset', service));
+      this.runners.push(
+        this.createRunner({ assetId: service.getAssetId() }, service),
+      );
     }
     for (const service of tokenServices) {
-      this.runners.push(this.createRunner('token', service));
+      this.runners.push(
+        this.createRunner({ tokenTypeId: service.getTokenTypeId() }, service),
+      );
     }
 
     this.runners.forEach((r) => r.start());
@@ -52,14 +72,17 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private createRunner(
-    kind: 'asset' | 'token',
-    service: { symbol: string; scanIntervalMs: number; scanTransactions: any },
+    target: ScanTarget,
+    service: AssetService | TokenService,
   ): ScanRunner {
+    const key = cursorKey(target);
     return new ScanRunner(
-      kind,
+      target,
       service,
       () => this.wallets.getScanAddresses(service.symbol),
       (symbol, txs) => this.txRepository.saveMany(symbol, txs),
+      () => this.cursorStore.load(key),
+      (cursor) => this.cursorStore.save(key, cursor),
       this.logger,
     );
   }
