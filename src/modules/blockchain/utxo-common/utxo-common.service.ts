@@ -1,42 +1,40 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getParameter } from '../parameter-store';
+import { getNodeUrlByPath } from '../parameter-store';
 import { UtxoRpcClient } from './utxo-rpc.client';
 
 /** UTXO 자산 1개(BTC/BCH ...)의 설정. btc/bch 서비스가 자기 값으로 채워 넘긴다. */
 export interface UtxoAssetConfig {
   /** 체인 심볼 (로그/식별용) */
   symbol: string;
-  /** 노드 URL 을 담은 파라미터 키 (예: 'BITCOIN_RPC_URL') */
-  rpcEnvKey: string;
-  /** scan range 파라미터 키 (예: 'BITCOIN_MAX_SCAN_RANGE'). btc/bch 가 onModuleInit 에서 조회. */
-  maxScanRangeKey: string;
+  /** ParamStore path (노드URL·maxScanRange 조회, 예: 'btc' / 'bch') */
+  path: string;
 }
 
 /**
  * BTC/BCH 공용 UTXO 스캔 엔진 (bitcoind 계열 JSON-RPC).
  *
- * 자산별로 노드 URL 이 다르므로(BITCOIN_RPC_URL vs BCH_RPC_URL) **무상태 엔진**으로 두고,
- * 호출 시 자산 설정(UtxoAssetConfig)을 받아 동작한다. 노드 클라이언트는 env 키 기준으로
- * lazy 생성 후 캐싱한다. btc/bch 서비스가 이 엔진을 주입받아 자기 설정으로 위임 호출한다.
+ * 자산별로 노드 URL 이 다르므로 **무상태 엔진**으로 두고, 호출 시 자산 설정(UtxoAssetConfig)을
+ * 받아 동작한다. 노드 클라이언트는 path 기준으로 lazy 생성 후 캐싱한다.
+ * btc/bch 서비스가 이 엔진을 주입받아 자기 설정으로 위임 호출한다.
  */
 @Injectable()
 export class UtxoCommonService {
   private readonly logger = new Logger('UtxoCommonService');
   private readonly clients = new Map<string, UtxoRpcClient | undefined>();
 
-  /** 파라미터 키 기준 클라이언트 lazy 생성/캐싱. 미설정이면 undefined(+1회 경고). */
+  /** path 기준 클라이언트 lazy 생성/캐싱. 미설정이면 undefined(+1회 경고). */
   private async client(
     cfg: UtxoAssetConfig,
   ): Promise<UtxoRpcClient | undefined> {
-    if (!this.clients.has(cfg.rpcEnvKey)) {
-      const url = await getParameter(cfg.rpcEnvKey);
-      this.clients.set(cfg.rpcEnvKey, url ? new UtxoRpcClient(url) : undefined);
+    if (!this.clients.has(cfg.path)) {
+      const url = await getNodeUrlByPath(cfg.path);
+      this.clients.set(cfg.path, url ? new UtxoRpcClient(url) : undefined);
     }
-    const client = this.clients.get(cfg.rpcEnvKey);
+    const client = this.clients.get(cfg.path);
     if (!client) {
-      warnMissingNode(this.logger, cfg.rpcEnvKey);
+      warnMissingNode(this.logger, cfg.path);
     }
     return client;
   }

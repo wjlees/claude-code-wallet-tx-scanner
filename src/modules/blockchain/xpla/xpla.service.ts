@@ -3,11 +3,10 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 import { XplaRestClient } from './xpla-rest.client';
 
-const XPLA_LCD_ENV = 'XPLA_LCD_URL';
-const XPLA_SCAN_RANGE_KEY = 'XPLA_MAX_SCAN_RANGE';
+const XPLA_PATH = 'xpla';
 /** XPLA 네이티브 denom */
 const XPLA_DENOM = 'axpla';
 
@@ -44,16 +43,16 @@ export class XplaService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(XPLA_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(XPLA_PATH);
     this.state.client = new XplaRestClient(url);
     this.logger.log(
       `LCD REST client initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. parameter.json(→env) 에서 async 로 가져온다(추후 DB/원격 설정 교체 가능). */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(XPLA_LCD_ENV);
+    return getNodeUrlByPath(XPLA_PATH);
   }
 
   async scanTransactions(
@@ -62,7 +61,7 @@ export class XplaService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XPLA_LCD_ENV);
+      warnMissingNode(this.logger, XPLA_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -163,7 +162,7 @@ export class XplaService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XPLA_LCD_ENV);
+      warnMissingNode(this.logger, XPLA_PATH);
       return '0';
     }
     return client.getBalance(address, XPLA_DENOM);
@@ -172,7 +171,7 @@ export class XplaService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XPLA_LCD_ENV);
+      warnMissingNode(this.logger, XPLA_PATH);
       return 0;
     }
     return client.getLatestHeight();

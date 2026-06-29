@@ -8,42 +8,48 @@ import { AssetId } from '../constants';
  * baseAssetId 로 이 값을 참조한다.
  */
 export interface EthereumBasedAssetType {
-  /** 네트워크 식별 이름 (e.g. 'ethereum', 'polygon', 'klaytn', 'konet') */
+  /** 네트워크 식별 이름 (로깅용) */
   networkName: string;
+  /** ParamStore path (= monorepo getParametersByPath path). 노드URL·maxScanRange 조회 키. */
+  path: string;
   /** EIP-1559(base fee) 지원 여부 */
   EIP1559: boolean;
   /** 적용 하드포크 (선택) */
   hardfork?: string;
-  /** 자산(코인) 이름 */
+  /** 자산(코인) 심볼 (서비스 symbol = monorepo 서비스 symbol) */
   assetName: string;
 }
 
 /**
  * EVM 계열 자산 레지스트리. (키 = `AssetId` 의 EVM 부분집합)
- * NOTE: EIP1559 / hardfork / assetName 값은 네트워크별로 확인 후 확정 필요(TODO).
+ * monorepo tx-scanner EVM 자산: konet / klay / cross / base(BASEETH).
+ * NOTE: EIP1559 / hardfork 값은 네트워크별 확인 후 확정 필요(TODO).
  */
 export const ethereumBasedAssets: Record<number, EthereumBasedAssetType> = {
-  [AssetId.ETH]: {
-    networkName: 'ethereum',
-    EIP1559: true,
-    hardfork: 'cancun',
-    assetName: 'ETH',
-  },
-  [AssetId.POLYGON]: {
-    networkName: 'polygon',
-    EIP1559: true,
-    hardfork: 'london',
-    assetName: 'POL',
+  [AssetId.KONET]: {
+    networkName: 'konet',
+    path: 'konet',
+    EIP1559: false,
+    assetName: 'konet',
   },
   [AssetId.KLAY]: {
     networkName: 'klaytn',
+    path: 'klay',
     EIP1559: false,
-    assetName: 'KLAY',
+    assetName: 'klay',
   },
-  [AssetId.KONET]: {
-    networkName: 'konet',
-    EIP1559: false,
-    assetName: 'KONET',
+  [AssetId.CROSS]: {
+    networkName: 'cross',
+    path: 'cross',
+    EIP1559: true,
+    assetName: 'cross',
+  },
+  [AssetId.BASE]: {
+    networkName: 'base',
+    path: 'base',
+    EIP1559: true,
+    hardfork: 'cancun',
+    assetName: 'base',
   },
 };
 

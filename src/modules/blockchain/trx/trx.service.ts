@@ -4,10 +4,9 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 
-const TRON_RPC_ENV = 'TRON_RPC_URL';
-const TRON_SCAN_RANGE_KEY = 'TRON_MAX_SCAN_RANGE';
+const TRON_PATH = 'tron'; // path 는 tron (symbol 은 trx)
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface TrxState {
@@ -42,16 +41,16 @@ export class TrxService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(TRON_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(TRON_PATH);
     this.state.tronWeb = new TronWeb({ fullHost: url });
     this.logger.log(
       `tronWeb initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  /** 노드 URL 조회. ParamStore path(tron) 기준 async 조회. */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(TRON_RPC_ENV);
+    return getNodeUrlByPath(TRON_PATH);
   }
 
   /** 토큰 서비스(trc20)가 같은 노드를 재사용하도록 노출. */
@@ -65,7 +64,7 @@ export class TrxService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { tronWeb } = this.state;
     if (!tronWeb) {
-      warnMissingNode(this.logger, TRON_RPC_ENV);
+      warnMissingNode(this.logger, TRON_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -126,7 +125,7 @@ export class TrxService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { tronWeb } = this.state;
     if (!tronWeb) {
-      warnMissingNode(this.logger, TRON_RPC_ENV);
+      warnMissingNode(this.logger, TRON_PATH);
       return '0';
     }
     const sun = await tronWeb.trx.getBalance(address);
@@ -136,7 +135,7 @@ export class TrxService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { tronWeb } = this.state;
     if (!tronWeb) {
-      warnMissingNode(this.logger, TRON_RPC_ENV);
+      warnMissingNode(this.logger, TRON_PATH);
       return 0;
     }
     const block = await tronWeb.trx.getCurrentBlock();

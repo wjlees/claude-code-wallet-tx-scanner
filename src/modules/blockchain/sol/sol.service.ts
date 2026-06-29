@@ -4,10 +4,9 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 
-const SOLANA_RPC_ENV = 'SOLANA_RPC_URL';
-const SOLANA_SCAN_RANGE_KEY = 'SOLANA_MAX_SCAN_RANGE';
+const SOL_PATH = 'sol';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface SolState {
@@ -42,16 +41,16 @@ export class SolService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(SOLANA_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(SOL_PATH);
     this.state.connection = new Connection(url, 'confirmed');
     this.logger.log(
       `connection initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(SOLANA_RPC_ENV);
+    return getNodeUrlByPath(SOL_PATH);
   }
 
   async scanTransactions(
@@ -60,7 +59,7 @@ export class SolService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { connection } = this.state;
     if (!connection) {
-      warnMissingNode(this.logger, SOLANA_RPC_ENV);
+      warnMissingNode(this.logger, SOL_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -94,7 +93,7 @@ export class SolService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { connection } = this.state;
     if (!connection) {
-      warnMissingNode(this.logger, SOLANA_RPC_ENV);
+      warnMissingNode(this.logger, SOL_PATH);
       return '0';
     }
     const lamports = await connection.getBalance(new PublicKey(address));
@@ -104,7 +103,7 @@ export class SolService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { connection } = this.state;
     if (!connection) {
-      warnMissingNode(this.logger, SOLANA_RPC_ENV);
+      warnMissingNode(this.logger, SOL_PATH);
       return 0;
     }
     return connection.getSlot();

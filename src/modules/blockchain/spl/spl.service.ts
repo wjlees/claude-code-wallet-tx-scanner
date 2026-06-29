@@ -4,10 +4,9 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 
-const SOLANA_RPC_ENV = 'SOLANA_RPC_URL';
-const SOLANA_SCAN_RANGE_KEY = 'SOLANA_MAX_SCAN_RANGE';
+const SOL_PATH = 'sol'; // SOL 노드 공유, scan range 도 sol path
 
 /** SPL Token Program */
 const TOKEN_PROGRAM_ID = new PublicKey(
@@ -46,16 +45,16 @@ export class SplService implements TokenService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(SOLANA_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(SOL_PATH);
     this.state.connection = new Connection(url, 'confirmed');
     this.logger.log(
       `connection initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(SOL 노드 공유). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(SOLANA_RPC_ENV);
+    return getNodeUrlByPath(SOL_PATH);
   }
 
   async scanTransactions(
@@ -64,7 +63,7 @@ export class SplService implements TokenService, OnModuleInit {
   ): Promise<ScanResult> {
     const { connection } = this.state;
     if (!connection) {
-      warnMissingNode(this.logger, SOLANA_RPC_ENV);
+      warnMissingNode(this.logger, SOL_PATH);
       return { txs: [], nextCursor: cursor };
     }
 

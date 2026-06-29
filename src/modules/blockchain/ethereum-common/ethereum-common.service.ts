@@ -3,7 +3,7 @@ import Web3 from 'web3';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getNodeUrl } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
@@ -46,22 +46,16 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       return; // 노드 미설정 → 스캔 skip (range 도 불필요)
     }
     // range 는 필수: 누락 시 throw → 이 자산은 초기화 실패(조용한 default 없음)
-    this.state.maxScanRange = await getMaxScanRange(
-      `${this.networkName.toUpperCase()}_MAX_SCAN_RANGE`,
-    );
+    this.state.maxScanRange = await getMaxScanRange(this.state.config.path);
     this.state.web3 = new Web3(url);
     this.logger.log(
       `web3 initialized @ ${this.networkName} (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. parameter.json(→env) 에서 async 로 가져온다(추후 DB/원격 설정 교체 가능). */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getNodeUrl(this.state.config.networkName);
-  }
-
-  private get nodeEnvKey(): string {
-    return `${this.networkName.toUpperCase()}_NODE_URL`;
+    return getNodeUrlByPath(this.state.config.path);
   }
 
   getAssetId(): number {
@@ -87,7 +81,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { web3 } = this.state;
     if (!web3) {
-      warnMissingNode(this.logger, this.nodeEnvKey);
+      warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -143,7 +137,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { web3 } = this.state;
     if (!web3) {
-      warnMissingNode(this.logger, this.nodeEnvKey);
+      warnMissingNode(this.logger, this.state.config.path);
       return '0';
     }
     const wei = await web3.eth.getBalance(address);
@@ -153,7 +147,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { web3 } = this.state;
     if (!web3) {
-      warnMissingNode(this.logger, this.nodeEnvKey);
+      warnMissingNode(this.logger, this.state.config.path);
       return 0;
     }
     return Number(await web3.eth.getBlockNumber());

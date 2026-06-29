@@ -18,8 +18,7 @@ import {
 export class BtcService implements AssetService, OnModuleInit {
   private readonly cfg: UtxoAssetConfig = {
     symbol: 'btc',
-    rpcEnvKey: 'BITCOIN_RPC_URL',
-    maxScanRangeKey: 'BITCOIN_MAX_SCAN_RANGE',
+    path: 'btc',
   };
   readonly scanIntervalMs = 5000;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
@@ -30,7 +29,7 @@ export class BtcService implements AssetService, OnModuleInit {
   /** 노드가 설정돼 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
   async onModuleInit(): Promise<void> {
     if (await this.utxo.hasNode(this.cfg)) {
-      this.maxScanRange = await getMaxScanRange(this.cfg.maxScanRangeKey);
+      this.maxScanRange = await getMaxScanRange(this.cfg.path);
     }
   }
 

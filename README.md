@@ -16,7 +16,7 @@
 | tx-scanner 모듈 | ✅ 완료 | **자산별 독립 무한 루프 + cron 워치독**. scanTransactions 호출 → 저장(껍데기) |
 | 자산별 scanTransactions | ✅ 완료 | EVM/BTC/TRX/TRC20/XPLA=블록범위, SOL/SPL=signature, XLM=Horizon, XRP=account_tx. cursor 기반 |
 | 실제 노드 SDK 연동 | ✅ 완료 | EVM=web3, SOL/SPL=@solana/web3.js, XLM=@stellar/stellar-sdk, BTC/BCH·XRP·XPLA=JSON-RPC/REST(fetch), TRX/TRC20=tronweb. 노드 URL·scan range는 `parameter.json`(→env)에서 **async** 조회. 노드 URL 없으면 skip, scan range 는 필수(없으면 throw) |
-| 스캔 진행 지점 영속화 | ✅ 완료(stub) | `AssetRepository` → `asset.start_block_number`(=과거 cursor). `getStartBlockNumber`/`updateStartBlockNumber`. 현재 in-memory stub — **DB(`asset` 테이블)로 교체 예정** |
+| 스캔 진행 지점 영속화 | ✅ 완료(stub) | `WalletScannerAssetRepository` → `wallet_scanner_asset.start_block_number`(=과거 cursor). 현재 in-memory stub — **DB 로 교체 예정** |
 | DB 연동 | ⬜ 미착수(의도) | wallet / tx(`detected_transactions`) / 진행지점(`asset`) 모두 stub, parameter 는 JSON — **회사 DB/ParamStore 로 교체 예정** |
 
 > ⚠️ "껍데기(stub)" = 인터페이스/흐름만 구현하고 내부는 `console.log` + 고정값 반환. 실제 로직은 추후 구현.
@@ -33,7 +33,7 @@ src/
     │   ├── blockchain.module.ts
     │   ├── blockchain.service.ts    # 숫자 id(AssetId/TokenTypeId)로 AssetService/TokenService 조회
     │   ├── constants.ts             # AssetId / TokenTypeId enum (전 체인 단일 소스)
-    │   ├── parameter-store.ts       # 노드 URL 등 파라미터 async 조회 (parameter.json→env, DB 교체 예정)
+    │   ├── parameter-store.ts       # getParametersByPath(path) — path별 {nodeUrl,maxScanRange} 조회 (parameter.json, DB 교체 예정)
     │   ├── node-config.ts           # warnMissingNode (노드 미설정 1회 경고)
     │   ├── interfaces/
     │   │   ├── asset.interface.ts    # AssetService (네이티브 코인): scanTransactions + scanIntervalMs
@@ -42,7 +42,7 @@ src/
     │   ├── ethereum-common/          # AssetService. EVM 멀티 네트워크, 네트워크당 인스턴스
     │   │   ├── ethereum-common.module.ts # 옵션4: 개별 provider + 배열 aggregate(ETHEREUM_COMMON_SERVICES)
     │   │   ├── ethereum-common.service.ts # assetId당 1인스턴스. 런타임상태=state, web3는 onModuleInit(async URL)에서 초기화. scanTransactions(블록범위)
-    │   │   └── ethereum-based-assets.ts  # EthereumBasedAssetType + ethereumBasedAssets/Ids(ETH/POLYGON/KLAY/KONET)
+    │   │   └── ethereum-based-assets.ts  # EthereumBasedAssetType + ethereumBasedAssets/Ids(konet/klay/cross/base) + path
     │   ├── sol/                      # AssetService. signature 페이징 스캔, 빠른 cadence(500ms)
     │   ├── xlm/                      # AssetService. Horizon /accounts + memoId, cursor=paging_token
     │   ├── utxo-common/              # BTC/BCH 공용 UTXO 엔진 (btc/bch가 import+주입)
@@ -72,7 +72,7 @@ src/
         ├── tx-scanner.module.ts      # BlockchainModule + WalletModule import, CURSOR_STORE provider
         ├── tx-scanner.service.ts     # 대상별 ScanRunner 생성/구동 + @Cron 워치독 (cursorKey)
         ├── scan-runner.ts            # 대상 1개의 독립 무한 루프(cursor load/save/sleep/graceful stop)
-        ├── asset.repository.ts       # asset.start_block_number(스캔 진행 지점) 저장 인터페이스 + in-memory stub
+        ├── wallet-scanner-asset.repository.ts # wallet_scanner_asset.start_block_number(진행 지점) 인터페이스 + in-memory stub
         ├── detected-transactions.repository.ts # detected_transactions 저장 인터페이스 + stub
         ├── detected-tx.mapper.ts     # DetectedTx+ScanTarget → InsertParams 매핑, resolveStoreAssetId
         └── tx.repository.ts          # mapper 변환 후 DetectedTransactionsRepository 로 저장
@@ -129,11 +129,11 @@ TxScannerService.onModuleInit()
 > 노드 RPC 메서드 상세 근거는 [`docs/fetching-transactions-by-node.md`](./docs/fetching-transactions-by-node.md).
 
 ### 노드 연동(SDK) & 설정
-각 자산은 실제 SDK 또는 노드 JSON-RPC 로 접속한다. **노드 URL 은 [`parameter-store.ts`](./src/modules/blockchain/parameter-store.ts) 의 async `getParameter`/`getNodeUrl`** 로 읽는다 — 소스는 루트 [`parameter.json`](./parameter.example.json)(gitignore, 템플릿은 `parameter.example.json`), 없으면 `process.env`/`.env` 폴백. 미설정이면 해당 자산은 **스캔 skip**(노드 없이도 부팅/테스트 가능). 조회가 async 라서 추후 DB/원격 ParamStore 로 교체해도 호출부는 안 바뀐다.
+각 자산은 실제 SDK 또는 노드 JSON-RPC 로 접속한다. **노드 URL·scan range 는 [`parameter-store.ts`](./src/modules/blockchain/parameter-store.ts) 의 async `getParametersByPath(path)`** 로 읽는다(monorepo ParamStore 동일 모델) — 소스는 루트 `parameter.json`(gitignore, 템플릿 [`parameter.example.json`](./parameter.example.json))의 **자산별 path 객체** `{ nodeUrl, maxScanRange }`. path 는 monorepo path 와 일치(예: trx→`tron`, klaytn→`klay`). 노드 미설정이면 해당 자산 **스캔 skip**. 추후 DB/원격 ParamStore 로 교체해도 호출부는 안 바뀐다.
 
 | 자산 | SDK/연동 | 파라미터 키 (parameter.json / env) |
 |------|-----|--------|
-| EVM (ETH/POL/KLAY/KONET) | `web3` | `<NETWORK>_NODE_URL` (예: `ETHEREUM_NODE_URL`) |
+| EVM (konet/klay/cross/base) | `web3` | path: `konet`/`klay`/`cross`/`base` |
 | EVM 토큰 (erc20/kip7) | (기반 자산 web3 재사용) | 기반 자산 env |
 | SOL / SPL | `@solana/web3.js` | `SOLANA_RPC_URL` |
 | XLM | `@stellar/stellar-sdk` (Horizon) | `STELLAR_HORIZON_URL` |
@@ -183,8 +183,8 @@ TxScannerService.onModuleInit()
 - 식별은 **숫자 id**([`constants.ts`](./src/modules/blockchain/constants.ts) 의 `AssetId`/`TokenTypeId`)가 1차 키. symbol 은 로깅용 보조값(지갑/저장 조회도 id 기준).
 - **BlockchainService**: 숫자 id 로 구현체를 조회하는 진입점.
   - `getAssetService(assetId)` / `getTokenService(tokenTypeId)` / `getAllAssetServices()` / `getAllTokenServices()`
-  - `getSupportedAssetIds()` → `[1..11]` (ETH=1,POL=2,KLAY=3,KONET=4,SOL=5,XLM=6,BTC=7,BCH=8,TRX=9,XRP=10,XPLA=11)
-  - `getSupportedTokenTypeIds()` → `[1,2,3,4]` (ERC20=1,KIP7=2,SPL=3,TRC20=4)
+  - `getSupportedAssetIds()` → `[1..11]` (KONET=1,KLAY=2,CROSS=3,BASE=4,SOL=5,XLM=6,BTC=7,BCH=8,TRX=9,XRP=10,XPLA=11) — monorepo tx-scanner 로스터 일치
+  - `getSupportedTokenTypeIds()` → `[1..5]` (KIP7=1,KONETTOKEN=2,BASETOKEN=3,SPL=4,TRC20=5)
   - 각 서비스가 `getAssetId()`/`getTokenTypeId()` 로 자기 id 를 알려주므로 `Map<number, …>` 에 그 키로 등록한다(asset/token 은 별도 맵이라 id 가 겹쳐도 무방).
 
 ### 다른 모듈에서 사용하는 법
@@ -198,8 +198,8 @@ export class SomeService {
   constructor(private readonly blockchain: BlockchainService) {}
 
   async run() {
-    const eth = this.blockchain.getAssetService(AssetId.ETH); // 숫자 id 로 조회
-    const { txs, nextCursor } = await eth.scanTransactions(['0x...'], null);
+    const konet = this.blockchain.getAssetService(AssetId.KONET); // 숫자 id 로 조회
+    const { txs, nextCursor } = await konet.scanTransactions(['0x...'], null);
   }
 }
 ```
@@ -271,4 +271,5 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 - **2026-06-25**: **cursor 영속화 + 파라미터 스토어**. (1) `CursorStore` 도입(`tx-scanner/cursor-store.ts`) — `JsonCursorStore` 가 `.data/cursors.json` 에 대상별 cursor 저장. `ScanRunner` 가 시작 시 `load`(resume), 사이클마다 `save`. key=`asset:<id>`/`token:<id>`. `CURSOR_STORE` 토큰 주입, DB 교체 대비 인터페이스 유지. 검증: 5초 스캔 후 cursors.json 기록 → 재시작 시 `resume from cursor=…` 확인. (2) 노드 URL 조회를 `parameter-store.ts`(async `getParameter`/`getNodeUrl`)로 이전 — 소스 `parameter.json`(gitignore)→env 폴백, `node-config.ts` 는 `warnMissingNode` 만 남김. 전 서비스 `resolveNodeUrl`/UtxoCommonService 가 await 조회. 검증: parameter.json 값이 env 보다 우선함 확인.
 - **2026-06-29**: **진행 지점 영속화를 `asset` 테이블 모델로**. `CursorStore`/`JsonCursorStore`(`.data/cursors.json`) 제거 → `AssetRepository`(`asset.start_block_number`) + `StubAssetRepository`(in-memory, `ASSET_REPOSITORY` 토큰). `ScanRunner` 가 `getStartBlockNumber(assetId)`/`updateStartBlockNumber(assetId, …)` 로 load/save(행 키=`resolveStoreAssetId(target)`, 토큰=토큰 자체 assetId). 용어 `cursor`→**`startBlockNumber`**(저장 컬럼명 정렬; 체인 경계의 반환값은 여전히 불투명 `nextCursor`). `Asset` 스키마: id/iso_alpha3(symbol)/full_name(한글)/scale(≤8)/start_block_number/confirm_threshold. 검증: 부팅 시 get→null→scan→update(asset#1←25420998, 토큰 asset#1001 분리 저장) 확인. ⚠️ stub 은 in-memory 라 재시작 시 초기화(실제 DB 연결 시 영속).
 - **2026-06-29**: **monorepo 동기화 — XPLA REST + detected_transactions + maxScanRange**. (1) **XPLA `@xpla/xpla.js` 제거** — top-level import 만으로 부팅 크래시(`@xpla/xpla.proto` v2 누락)라 `XplaRestClient`(Cosmos LCD REST, `query=tx.height%3D{h}`)로 교체. live 22 tx 파싱 확인. (2) **tx 저장 연동** — `DetectedTransactionsRepository` 인터페이스 + `StubDetectedTransactionsRepository`(`DETECTED_TRANSACTIONS_REPOSITORY` 토큰) + `mapDetectedTxToInsertParams(target, tx)` 매퍼 추가. `TxRepository` 가 매핑 후 저장. 토큰은 **자체 assetId**(stub 1001+, 실제 DB token→assetId). (3) **scan range ParamStore화(필수값)** — `getMaxScanRange(<ASSET>_MAX_SCAN_RANGE)` 로 전 체인 batch/limit 을 조회. **코드 default 없음 — 미설정 시 throw**(노드 있는 자산은 `onModuleInit` 에서 range 까지 조회해 state 저장, 누락 시 초기화 실패). parameter.json 에 `<ASSET>_MAX_SCAN_RANGE` 명시 필수(EVM/SOL=1000, XLM/XRP=200, BTC/BCH=50, TRX=20, XPLA=10). 검증: init 로그에 maxScanRange 표시, 키 누락 시 throw 확인. (4) ef1dd24(Buffer/Uint8Array, getTransaction)는 prototype 에 서명/전송 코드가 없어 해당 없음.
+- **2026-06-29**: **monorepo 로스터·ParamStore·진행지점 테이블 정렬** (회사 AI 답변 Q1~Q4 반영). (1) **ParamStore path 모델** — `getParametersByPath(path)` + parameter.json 을 path별 `{nodeUrl,maxScanRange}` 객체로. `getNodeUrlByPath`/`getMaxScanRange(path)`. path 는 monorepo 와 일치(trx→`tron`, klaytn→`klay`, base(BASEETH)→`base`). (2) **진행지점 테이블** `asset` → **`wallet_scanner_asset`**(`WalletScannerAssetRepository`, main.asset 분리). (3) **자산 로스터 monorepo 일치** — EVM `konet/klay/cross/base` + 토큰 `kip7/konetToken/baseToken` (`ETH/POL/erc20` 제거, cross 는 EVM). `AssetId`/`TokenTypeId` 재정의. (4) 토큰 저장 assetId(contractAddress→assetId)는 양쪽 미정렬이라 stub(1001+) 유지(TODO). 검증: assetIds 1~11·tokenTypeIds 1~5, klay/konet web3 init + path별 maxScanRange, build/lint/부팅. 매핑: docs/MONOREPO-MAPPING.md §2·§5.
 - **2026-06-25**: **식별자 숫자화 + 서비스 구조 통일**. (1) `constants.ts` 단일 소스(`AssetId` 1~11 / `TokenTypeId` 1~4) 도입 — EVM 전용 `EthereumBasedAssetId`/`TokenTypeId` 제거하고 전 체인을 한 enum 으로. `AssetService.getAssetId()` / `TokenService.getTokenTypeId()` 를 인터페이스 계약으로 추가. `BlockchainService` 를 **`Map<number,…>`(id 키)** 로 전환(`getAssetService(assetId)`/`getTokenService(tokenTypeId)`, `getSupportedAssetIds`/`getSupportedTokenTypeIds`). (2) **state+onModuleInit 패턴을 전 노드핸들 서비스로 확산**(sol/xlm/trx/xrp/xpla/spl: 핸들을 onModuleInit 에서 async URL 로 초기화, 런타임 상태는 `state` 에; ethereum-token-common 도 state 그룹화). (3) `ScanRunner` 의 `kind:'asset'|'token'` → **`ScanTarget {assetId?, tokenTypeId?}`**(둘 중 최소 1개 필수, 없으면 throw; 둘 다 = SOL+SPL 같은 통합 스캔 여지). 검증: 부팅 시 전 핸들 onModuleInit 초기화 + 러너 라벨 `asset#1:ETH`…`token#1:erc20`, id 조회/에러 경로 확인.

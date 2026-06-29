@@ -57,12 +57,10 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     }
   }
 
-  /** 기반 노드(web3)가 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** 기반 노드(web3)가 있으면 scan range 를 ParamStore(토큰 자체 path)로 조회(필수, 누락 시 throw). */
   async onModuleInit(): Promise<void> {
     if (this.state.baseAssetService?.getWeb3()) {
-      this.state.maxScanRange = await getMaxScanRange(
-        `${this.networkName.toUpperCase()}_MAX_SCAN_RANGE`,
-      );
+      this.state.maxScanRange = await getMaxScanRange(this.state.config.path);
     }
   }
 
@@ -78,10 +76,6 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     return this.state.config.networkName;
   }
 
-  private get nodeEnvKey(): string {
-    return `${this.networkName.toUpperCase()}_NODE_URL`;
-  }
-
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
@@ -89,7 +83,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     const { baseAssetService } = this.state;
     const web3 = baseAssetService?.getWeb3();
     if (!web3) {
-      warnMissingNode(this.logger, this.nodeEnvKey);
+      warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
 

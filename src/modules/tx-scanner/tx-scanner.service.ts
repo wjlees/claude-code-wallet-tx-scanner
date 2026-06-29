@@ -11,8 +11,11 @@ import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { ScanTarget } from '../blockchain/interfaces/scan.types';
 import { WalletService } from '../wallet/wallet.service';
-import { ASSET_REPOSITORY, AssetRepository } from './asset.repository';
 import { resolveStoreAssetId } from './detected-tx.mapper';
+import {
+  WALLET_SCANNER_ASSET_REPOSITORY,
+  WalletScannerAssetRepository,
+} from './wallet-scanner-asset.repository';
 import { TxRepository } from './tx.repository';
 import { ScanRunner } from './scan-runner';
 
@@ -25,8 +28,8 @@ import { ScanRunner } from './scan-runner';
  *  - 무한 루프는 실시간성이 높지만 프로세스가 죽거나 루프가 멈추면 조용히 정지할 수 있다.
  *    그래서 cron 워치독이 주기적으로 각 루프의 생존/정체를 점검하고 필요 시 재시작한다.
  *    (워치독은 스캔 자체는 하지 않는다)
- *  - 각 루프는 진행 지점을 `AssetRepository`(asset.start_block_number)에 영속화하므로
- *    재시작/재가동 후 마지막 지점부터 이어서 스캔한다(at-least-once).
+ *  - 각 루프는 진행 지점을 `WalletScannerAssetRepository`(wallet_scanner_asset.start_block_number)에
+ *    영속화하므로 재시작/재가동 후 마지막 지점부터 이어서 스캔한다(at-least-once).
  */
 @Injectable()
 export class TxScannerService implements OnModuleInit, OnModuleDestroy {
@@ -37,7 +40,8 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     private readonly blockchain: BlockchainService,
     private readonly wallets: WalletService,
     private readonly txRepository: TxRepository,
-    @Inject(ASSET_REPOSITORY) private readonly assetRepository: AssetRepository,
+    @Inject(WALLET_SCANNER_ASSET_REPOSITORY)
+    private readonly scannerAssetRepository: WalletScannerAssetRepository,
   ) {}
 
   onModuleInit(): void {
@@ -67,15 +71,15 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     target: ScanTarget,
     service: AssetService | TokenService,
   ): ScanRunner {
-    // asset.start_block_number 행 키 = 저장 assetId (토큰이면 토큰 자체 assetId)
+    // wallet_scanner_asset 행 키 = 저장 assetId (토큰이면 토큰타입 stub assetId)
     const assetId = resolveStoreAssetId(target);
     return new ScanRunner(
       target,
       service,
       () => this.wallets.getScanAddresses(target),
       (txs) => this.txRepository.saveMany(target, txs),
-      () => this.assetRepository.getStartBlockNumber(assetId),
-      (sbn) => this.assetRepository.updateStartBlockNumber(assetId, sbn),
+      () => this.scannerAssetRepository.getStartBlockNumber(assetId),
+      (sbn) => this.scannerAssetRepository.updateStartBlockNumber(assetId, sbn),
       this.logger,
     );
   }

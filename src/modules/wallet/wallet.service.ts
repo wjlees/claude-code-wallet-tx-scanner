@@ -11,10 +11,10 @@ import { Wallet } from './wallet.types';
  */
 @Injectable()
 export class WalletService {
-  // TODO(DB): DB 연동 시 제거. EVM 은 동일 주소가 ETH/POLYGON/KLAY/KONET 공통.
+  // TODO(DB): DB 연동 시 제거. EVM 은 동일 주소가 konet/klay/cross/base 공통.
   private readonly stubWallets: Wallet[] = [
     {
-      assetIds: [AssetId.ETH, AssetId.POLYGON, AssetId.KLAY, AssetId.KONET],
+      assetIds: [AssetId.KONET, AssetId.KLAY, AssetId.CROSS, AssetId.BASE],
       addresses: [
         '0x0000000000000000000000000000000000000001',
         '0x0000000000000000000000000000000000000002',
@@ -62,13 +62,15 @@ export class WalletService {
     return [...ids];
   }
 
-  // TODO(DB): 실제로는 token→asset 매핑을 DB 에서 조회. 현재는 고정 stub.
+  // TODO(DB): 실제로는 token→asset 매핑을 DB(main.token) 에서 조회. 현재는 기반 체인 stub.
   private assetIdsOfToken(tokenTypeId: number): number[] {
     switch (tokenTypeId) {
-      case TokenTypeId.ERC20:
-        return [AssetId.ETH];
       case TokenTypeId.KIP7:
         return [AssetId.KLAY];
+      case TokenTypeId.KONETTOKEN:
+        return [AssetId.KONET];
+      case TokenTypeId.BASETOKEN:
+        return [AssetId.BASE];
       case TokenTypeId.SPL:
         return [AssetId.SOL];
       case TokenTypeId.TRC20:

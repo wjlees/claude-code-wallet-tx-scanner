@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 import { WalletModule } from '../wallet/wallet.module';
-import { ASSET_REPOSITORY, StubAssetRepository } from './asset.repository';
 import {
   DETECTED_TRANSACTIONS_REPOSITORY,
   StubDetectedTransactionsRepository,
 } from './detected-transactions.repository';
+import {
+  WALLET_SCANNER_ASSET_REPOSITORY,
+  StubWalletScannerAssetRepository,
+} from './wallet-scanner-asset.repository';
 import { TxScannerService } from './tx-scanner.service';
 import { TxRepository } from './tx.repository';
 
@@ -14,8 +17,11 @@ import { TxRepository } from './tx.repository';
   providers: [
     TxScannerService,
     TxRepository,
-    // 스캔 진행 지점(asset.start_block_number) 저장소(현재 in-memory stub). 실제 DB 로 교체 시 교체.
-    { provide: ASSET_REPOSITORY, useClass: StubAssetRepository },
+    // 스캔 진행 지점(wallet_scanner_asset.start_block_number) 저장소(현재 in-memory stub).
+    {
+      provide: WALLET_SCANNER_ASSET_REPOSITORY,
+      useClass: StubWalletScannerAssetRepository,
+    },
     // 감지 tx 저장소(현재 콘솔 stub). 실제 DB 로 교체 시 이 provider 만 바꾼다.
     {
       provide: DETECTED_TRANSACTIONS_REPOSITORY,

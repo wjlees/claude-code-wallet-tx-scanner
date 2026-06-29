@@ -3,11 +3,10 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 import { XrpRpcClient } from './xrp-rpc.client';
 
-const XRP_RPC_ENV = 'XRP_RPC_URL';
-const XRP_SCAN_RANGE_KEY = 'XRP_MAX_SCAN_RANGE';
+const XRP_PATH = 'xrp';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface XrpState {
@@ -40,16 +39,16 @@ export class XrpService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(XRP_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(XRP_PATH);
     this.state.client = new XrpRpcClient(url);
     this.logger.log(
       `rippled client initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(XRP_RPC_ENV);
+    return getNodeUrlByPath(XRP_PATH);
   }
 
   async scanTransactions(
@@ -58,7 +57,7 @@ export class XrpService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XRP_RPC_ENV);
+      warnMissingNode(this.logger, XRP_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -103,7 +102,7 @@ export class XrpService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XRP_RPC_ENV);
+      warnMissingNode(this.logger, XRP_PATH);
       return '0';
     }
     return client.getBalance(address);
@@ -112,7 +111,7 @@ export class XrpService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { client } = this.state;
     if (!client) {
-      warnMissingNode(this.logger, XRP_RPC_ENV);
+      warnMissingNode(this.logger, XRP_PATH);
       return 0;
     }
     return client.getCurrentLedgerIndex();

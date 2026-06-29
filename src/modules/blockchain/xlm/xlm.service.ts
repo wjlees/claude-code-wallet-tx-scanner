@@ -4,10 +4,9 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getParameter } from '../parameter-store';
+import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
 
-const STELLAR_HORIZON_ENV = 'STELLAR_HORIZON_URL';
-const STELLAR_SCAN_RANGE_KEY = 'STELLAR_MAX_SCAN_RANGE';
+const XLM_PATH = 'xlm';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface XlmState {
@@ -41,16 +40,16 @@ export class XlmService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(STELLAR_SCAN_RANGE_KEY);
+    this.state.maxScanRange = await getMaxScanRange(XLM_PATH);
     this.state.server = new Horizon.Server(url);
     this.logger.log(
       `Horizon server initialized (maxScanRange=${this.state.maxScanRange})`,
     );
   }
 
-  /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
+  /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
   private async resolveNodeUrl(): Promise<string | undefined> {
-    return getParameter(STELLAR_HORIZON_ENV);
+    return getNodeUrlByPath(XLM_PATH);
   }
 
   async scanTransactions(
@@ -59,7 +58,7 @@ export class XlmService implements AssetService, OnModuleInit {
   ): Promise<ScanResult> {
     const { server } = this.state;
     if (!server) {
-      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
+      warnMissingNode(this.logger, XLM_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
@@ -99,7 +98,7 @@ export class XlmService implements AssetService, OnModuleInit {
   async getBalance(address: string): Promise<string> {
     const { server } = this.state;
     if (!server) {
-      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
+      warnMissingNode(this.logger, XLM_PATH);
       return '0';
     }
     const account = await server.loadAccount(address);
@@ -110,7 +109,7 @@ export class XlmService implements AssetService, OnModuleInit {
   async getBlockHeight(): Promise<number> {
     const { server } = this.state;
     if (!server) {
-      warnMissingNode(this.logger, STELLAR_HORIZON_ENV);
+      warnMissingNode(this.logger, XLM_PATH);
       return 0;
     }
     const latest = await server.ledgers().order('desc').limit(1).call();

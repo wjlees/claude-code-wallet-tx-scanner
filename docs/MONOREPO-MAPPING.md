@@ -67,10 +67,15 @@
 - prototype 검증: build/lint/부팅/live …
 ```
 
-## 5. 미해결 정렬 항목 (양쪽 합의/작업 필요)
-1. **ParamStore 모델**: prototype flat 키 → monorepo `getParametersByPath(path)` 로 정렬. node URL·`maxScanRange` 를 path별 객체로.
-2. **scan range 필드명**: `maxScanRange` 로 통일(완료된 용어). prototype 키 구조만 path별로 변경.
-3. **진행 지점 테이블**: prototype `asset.start_block_number` ↔ monorepo `wallet_scanner_asset.start_block_number`(별도 테이블). → prototype 을 `wallet_scanner_asset` 로 맞출지 결정.
-4. **토큰 저장 assetId**: 목표=토큰 자체 assetId(`main.asset`), `main.token` 의 contractAddress→assetId 로 해석. **양쪽 mapper 모두 현재 기반 체인 assetId 넣음(미정렬)** → 같이 정렬.
-5. **detected_transactions 멱등**: 양쪽 **미구현**. unique index 후보 `(asset_id, tx_id, from_address, to_address)` (또는 `(asset_id, tx_id, to_address)`). migration+app 합의 후 구현.
-6. **자산 로스터**(§3): prototype(ETH/POL/erc20) ↔ monorepo(cross/base/konetToken/baseToken). 맞출지 결정.
+## 5. 정렬 상태
+**prototype 반영 완료 (2026-06-29):**
+1. ✅ **ParamStore 모델**: `getParametersByPath(path)` + path별 `{ nodeUrl, maxScanRange }` 로 전환. 헬퍼 `getNodeUrlByPath`/`getMaxScanRange(path)`.
+2. ✅ **scan range**: `maxScanRange` (path별, 필수·없으면 throw).
+3. ✅ **진행 지점 테이블**: `wallet_scanner_asset.start_block_number` 로 맞춤(`WalletScannerAssetRepository`). main.asset 와 분리.
+6. ✅ **자산 로스터**: monorepo 기준 일치 — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken, sol/spl/xlm/btc/bch/trx/trc20/xrp/xpla. (ETH/POL/erc20 제거)
+
+**아직 양쪽 미정렬 (둘 다 작업 필요):**
+4. ⏳ **토큰 저장 assetId**: 목표=토큰 자체 assetId(`main.asset`), `main.token` 의 contractAddress→assetId 로 per-tx 해석. **양쪽 mapper 모두 현재 토큰타입 단위(기반/stub) — 미정렬.** prototype 은 stub assetId(1001+) 유지 + TODO.
+5. ⏳ **detected_transactions 멱등**: 양쪽 **미구현**. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후 구현.
+
+> 참고(심볼/값): `AssetId`/`TokenTypeId` 숫자값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).

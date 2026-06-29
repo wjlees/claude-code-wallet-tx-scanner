@@ -8,8 +8,8 @@ import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
 const TRANSFER_SELECTOR = 'a9059cbb';
-/** TRX 노드를 공유하므로 scan range 키도 TRON 공용 */
-const TRON_SCAN_RANGE_KEY = 'TRON_MAX_SCAN_RANGE';
+/** 노드는 TRX(tron) 공유, scan range 는 토큰 자체 path(trc20) */
+const TRC20_PATH = 'trc20';
 
 /**
  * Tron TRC20 토큰.
@@ -33,7 +33,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
   /** 기반 TRX 노드가 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
   async onModuleInit(): Promise<void> {
     if (this.trx.getTronWeb()) {
-      this.maxScanRange = await getMaxScanRange(TRON_SCAN_RANGE_KEY);
+      this.maxScanRange = await getMaxScanRange(TRC20_PATH);
     }
   }
 
@@ -47,7 +47,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
   ): Promise<ScanResult> {
     const tronWeb = this.trx.getTronWeb();
     if (!tronWeb) {
-      warnMissingNode(this.logger, 'TRON_RPC_URL');
+      warnMissingNode(this.logger, TRC20_PATH);
       return { txs: [], nextCursor: cursor };
     }
 
