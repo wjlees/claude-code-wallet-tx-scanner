@@ -1,12 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
+import { getMaxScanRange } from '../parameter-store';
 import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
 const TRANSFER_SELECTOR = 'a9059cbb';
+/** TRX 노드를 공유하므로 scan range 키도 TRON 공용 */
+const TRON_SCAN_RANGE_KEY = 'TRON_MAX_SCAN_RANGE';
 
 /**
  * Tron TRC20 토큰.
@@ -18,13 +21,21 @@ const TRANSFER_SELECTOR = 'a9059cbb';
  * NOTE: 추적할 개별 TRC20 컨트랙트 주소는 DB 에서 가져온다(현재는 전체 transfer 매칭).
  */
 @Injectable()
-export class Trc20Service implements TokenService {
+export class Trc20Service implements TokenService, OnModuleInit {
   readonly symbol = 'trc20';
   readonly scanIntervalMs = 3000;
-  private readonly batchSize = 20;
   private readonly logger = new Logger('Trc20Service');
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  private maxScanRange?: number;
 
   constructor(private readonly trx: TrxService) {}
+
+  /** 기반 TRX 노드가 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
+  async onModuleInit(): Promise<void> {
+    if (this.trx.getTronWeb()) {
+      this.maxScanRange = await getMaxScanRange(TRON_SCAN_RANGE_KEY);
+    }
+  }
 
   getTokenTypeId(): number {
     return TokenTypeId.TRC20;
@@ -45,7 +56,7 @@ export class Trc20Service implements TokenService {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.batchSize - 1, head);
+    const to = Math.min(from + this.maxScanRange! - 1, head);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];

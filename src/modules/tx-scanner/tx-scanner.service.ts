@@ -11,19 +11,10 @@ import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { ScanTarget } from '../blockchain/interfaces/scan.types';
 import { WalletService } from '../wallet/wallet.service';
-import { CURSOR_STORE, CursorStore } from './cursor-store';
+import { ASSET_REPOSITORY, AssetRepository } from './asset.repository';
+import { resolveStoreAssetId } from './detected-tx.mapper';
 import { TxRepository } from './tx.repository';
 import { ScanRunner } from './scan-runner';
-
-/** ScanTarget → cursor 저장 키 (assetId/tokenTypeId 기반, 심볼과 무관하게 안정적). */
-function cursorKey(target: ScanTarget): string {
-  const parts: string[] = [];
-  if (target.assetId !== undefined) parts.push(`asset:${target.assetId}`);
-  if (target.tokenTypeId !== undefined) {
-    parts.push(`token:${target.tokenTypeId}`);
-  }
-  return parts.join('+');
-}
 
 /**
  * 대상 주소(hot/cold)의 모든 in/out tx 를 감지하여 저장하는 스캐너.
@@ -34,8 +25,8 @@ function cursorKey(target: ScanTarget): string {
  *  - 무한 루프는 실시간성이 높지만 프로세스가 죽거나 루프가 멈추면 조용히 정지할 수 있다.
  *    그래서 cron 워치독이 주기적으로 각 루프의 생존/정체를 점검하고 필요 시 재시작한다.
  *    (워치독은 스캔 자체는 하지 않는다)
- *  - 각 루프는 cursor 를 `CursorStore`(JSON 파일 stub)에 영속화하므로 재시작/재가동 후
- *    마지막 지점부터 이어서 스캔한다(at-least-once).
+ *  - 각 루프는 진행 지점을 `AssetRepository`(asset.start_block_number)에 영속화하므로
+ *    재시작/재가동 후 마지막 지점부터 이어서 스캔한다(at-least-once).
  */
 @Injectable()
 export class TxScannerService implements OnModuleInit, OnModuleDestroy {
@@ -46,7 +37,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     private readonly blockchain: BlockchainService,
     private readonly wallets: WalletService,
     private readonly txRepository: TxRepository,
-    @Inject(CURSOR_STORE) private readonly cursorStore: CursorStore,
+    @Inject(ASSET_REPOSITORY) private readonly assetRepository: AssetRepository,
   ) {}
 
   onModuleInit(): void {
@@ -76,14 +67,15 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     target: ScanTarget,
     service: AssetService | TokenService,
   ): ScanRunner {
-    const key = cursorKey(target);
+    // asset.start_block_number 행 키 = 저장 assetId (토큰이면 토큰 자체 assetId)
+    const assetId = resolveStoreAssetId(target);
     return new ScanRunner(
       target,
       service,
       () => this.wallets.getScanAddresses(target),
       (txs) => this.txRepository.saveMany(target, txs),
-      () => this.cursorStore.load(key),
-      (cursor) => this.cursorStore.save(key, cursor),
+      () => this.assetRepository.getStartBlockNumber(assetId),
+      (sbn) => this.assetRepository.updateStartBlockNumber(assetId, sbn),
       this.logger,
     );
   }

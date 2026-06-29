@@ -4,14 +4,17 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getParameter } from '../parameter-store';
+import { getMaxScanRange, getParameter } from '../parameter-store';
 
 const TRON_RPC_ENV = 'TRON_RPC_URL';
+const TRON_SCAN_RANGE_KEY = 'TRON_MAX_SCAN_RANGE';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface TrxState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   tronWeb?: TronWeb;
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -27,7 +30,6 @@ interface TrxState {
 export class TrxService implements AssetService, OnModuleInit {
   readonly symbol = 'trx';
   readonly scanIntervalMs = 3000;
-  private readonly batchSize = 20;
   private readonly logger = new Logger('TrxService');
   private readonly state: TrxState = {};
 
@@ -37,10 +39,14 @@ export class TrxService implements AssetService, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
-    if (url) {
-      this.state.tronWeb = new TronWeb({ fullHost: url });
-      this.logger.log('tronWeb initialized');
+    if (!url) {
+      return; // 노드 미설정 → 스캔 skip
     }
+    this.state.maxScanRange = await getMaxScanRange(TRON_SCAN_RANGE_KEY);
+    this.state.tronWeb = new TronWeb({ fullHost: url });
+    this.logger.log(
+      `tronWeb initialized (maxScanRange=${this.state.maxScanRange})`,
+    );
   }
 
   /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
@@ -68,7 +74,7 @@ export class TrxService implements AssetService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.batchSize - 1, head);
+    const to = Math.min(from + this.state.maxScanRange! - 1, head);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];

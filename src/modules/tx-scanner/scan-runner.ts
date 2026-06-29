@@ -16,8 +16,12 @@ export class ScanRunner {
   private sleepTimer?: NodeJS.Timeout;
   private wake?: () => void;
 
-  /** cursor: 자산별 불투명 스캔 지점. 시작 시 store 에서 load, 사이클마다 save. */
-  private cursor: string | null = null;
+  /**
+   * startBlockNumber: 다음 스캔 시작 지점(asset.start_block_number 에 영속).
+   * 체인마다 의미가 다른 불투명 값이지만(블록번호/signature/ledger 등) 저장 컬럼명을 따라 명명.
+   * 시작 시 store 에서 load, 사이클마다 save.
+   */
+  private startBlockNumber: string | null = null;
   /** 마지막으로 한 사이클을 정상 완료한 시각 (워치독용) */
   private lastActivityAt = Date.now();
 
@@ -29,9 +33,11 @@ export class ScanRunner {
     private readonly getAddresses: () => Promise<string[]>,
     // 저장 대상 식별(assetId/tokenTypeId)은 tx-scanner 가 콜백에 바인딩한다.
     private readonly save: (txs: DetectedTx[]) => Promise<void>,
-    // cursor 영속화 콜백(저장소는 tx-scanner 가 주입). 시작 시 load, 사이클마다 save.
-    private readonly loadCursor: () => Promise<string | null>,
-    private readonly saveCursor: (cursor: string | null) => Promise<void>,
+    // start_block_number 영속화 콜백(asset 저장소는 tx-scanner 가 주입). 시작 시 load, 사이클마다 save.
+    private readonly loadStartBlockNumber: () => Promise<string | null>,
+    private readonly saveStartBlockNumber: (
+      startBlockNumber: string | null,
+    ) => Promise<void>,
     private readonly logger: Logger,
   ) {
     if (target.assetId === undefined && target.tokenTypeId === undefined) {
@@ -90,25 +96,28 @@ export class ScanRunner {
   }
 
   private async run(): Promise<void> {
-    // 시작 시 저장된 cursor 를 로드해 마지막 지점부터 이어서 스캔한다.
-    this.cursor = await this.loadCursor();
-    if (this.cursor !== null) {
-      this.logger.log(`[${this.label}] resume from cursor=${this.cursor}`);
+    // 시작 시 저장된 start_block_number 를 로드해 마지막 지점부터 이어서 스캔한다.
+    this.startBlockNumber = await this.loadStartBlockNumber();
+    if (this.startBlockNumber !== null) {
+      this.logger.log(
+        `[${this.label}] resume from startBlockNumber=${this.startBlockNumber}`,
+      );
     }
 
     while (this.running) {
       try {
         const addresses = await this.getAddresses();
+        // 체인 경계는 불투명 cursor (=startBlockNumber 값을 그대로 전달/회신)
         const { txs, nextCursor } = await this.service.scanTransactions(
           addresses,
-          this.cursor,
+          this.startBlockNumber,
         );
         if (txs.length > 0) {
           await this.save(txs);
         }
-        if (nextCursor !== this.cursor) {
-          this.cursor = nextCursor;
-          await this.saveCursor(this.cursor); // 진행 지점 영속화
+        if (nextCursor !== this.startBlockNumber) {
+          this.startBlockNumber = nextCursor;
+          await this.saveStartBlockNumber(this.startBlockNumber); // asset.start_block_number 갱신
         }
         this.lastActivityAt = Date.now();
       } catch (err) {

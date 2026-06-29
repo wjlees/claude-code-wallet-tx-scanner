@@ -4,14 +4,17 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getParameter } from '../parameter-store';
+import { getMaxScanRange, getParameter } from '../parameter-store';
 
 const SOLANA_RPC_ENV = 'SOLANA_RPC_URL';
+const SOLANA_SCAN_RANGE_KEY = 'SOLANA_MAX_SCAN_RANGE';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface SolState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   connection?: Connection;
+  /** page limit. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -36,10 +39,14 @@ export class SolService implements AssetService, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
-    if (url) {
-      this.state.connection = new Connection(url, 'confirmed');
-      this.logger.log('connection initialized');
+    if (!url) {
+      return; // 노드 미설정 → 스캔 skip
     }
+    this.state.maxScanRange = await getMaxScanRange(SOLANA_SCAN_RANGE_KEY);
+    this.state.connection = new Connection(url, 'confirmed');
+    this.logger.log(
+      `connection initialized (maxScanRange=${this.state.maxScanRange})`,
+    );
   }
 
   /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
@@ -57,13 +64,14 @@ export class SolService implements AssetService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
+    const limit = this.state.maxScanRange!;
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 
     for (const address of addresses) {
       const sigs = await connection.getSignaturesForAddress(
         new PublicKey(address),
-        { until: cursor ?? undefined, limit: 1000 },
+        { until: cursor ?? undefined, limit },
       );
       // 결과는 최신순. 첫 호출의 가장 최신 signature 를 다음 커서로.
       if (sigs.length > 0 && newest === cursor) {

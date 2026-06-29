@@ -10,5 +10,17 @@
   "TRON_RPC_URL": "https://api.trongrid.io",
   "XRP_RPC_URL": "https://s1.ripple.com:51234",
   "XPLA_LCD_URL": "https://dimension-lcd.xpla.dev",
-  "XPLA_CHAIN_ID": "dimension_37-1"
+
+  "_comment_maxScanRange": "1회 스캔 범위(블록수/page limit). 필수값 — 노드가 설정된 자산은 반드시 있어야 하며 없으면 초기화 시 throw. 키: <ASSET>_MAX_SCAN_RANGE",
+  "ETHEREUM_MAX_SCAN_RANGE": "1000",
+  "POLYGON_MAX_SCAN_RANGE": "1000",
+  "KLAYTN_MAX_SCAN_RANGE": "1000",
+  "KONET_MAX_SCAN_RANGE": "1000",
+  "SOLANA_MAX_SCAN_RANGE": "1000",
+  "STELLAR_MAX_SCAN_RANGE": "200",
+  "BITCOIN_MAX_SCAN_RANGE": "50",
+  "BCH_MAX_SCAN_RANGE": "50",
+  "TRON_MAX_SCAN_RANGE": "20",
+  "XRP_MAX_SCAN_RANGE": "200",
+  "XPLA_MAX_SCAN_RANGE": "10"
 }

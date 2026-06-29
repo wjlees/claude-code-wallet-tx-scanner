@@ -4,14 +4,17 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getParameter } from '../parameter-store';
+import { getMaxScanRange, getParameter } from '../parameter-store';
 
 const STELLAR_HORIZON_ENV = 'STELLAR_HORIZON_URL';
+const STELLAR_SCAN_RANGE_KEY = 'STELLAR_MAX_SCAN_RANGE';
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface XlmState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   server?: Horizon.Server;
+  /** page limit. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -35,10 +38,14 @@ export class XlmService implements AssetService, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
-    if (url) {
-      this.state.server = new Horizon.Server(url);
-      this.logger.log('Horizon server initialized');
+    if (!url) {
+      return; // 노드 미설정 → 스캔 skip
     }
+    this.state.maxScanRange = await getMaxScanRange(STELLAR_SCAN_RANGE_KEY);
+    this.state.server = new Horizon.Server(url);
+    this.logger.log(
+      `Horizon server initialized (maxScanRange=${this.state.maxScanRange})`,
+    );
   }
 
   /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
@@ -56,6 +63,7 @@ export class XlmService implements AssetService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
+    const limit = this.state.maxScanRange!;
     const txs: DetectedTx[] = [];
     let nextCursor: string | null = cursor;
 
@@ -65,7 +73,7 @@ export class XlmService implements AssetService, OnModuleInit {
         .forAccount(address)
         .cursor(cursor ?? '')
         .order('asc')
-        .limit(200)
+        .limit(limit)
         .call();
 
       for (const record of page.records) {

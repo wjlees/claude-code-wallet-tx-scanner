@@ -4,9 +4,10 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getParameter } from '../parameter-store';
+import { getMaxScanRange, getParameter } from '../parameter-store';
 
 const SOLANA_RPC_ENV = 'SOLANA_RPC_URL';
+const SOLANA_SCAN_RANGE_KEY = 'SOLANA_MAX_SCAN_RANGE';
 
 /** SPL Token Program */
 const TOKEN_PROGRAM_ID = new PublicKey(
@@ -17,6 +18,8 @@ const TOKEN_PROGRAM_ID = new PublicKey(
 interface SplState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   connection?: Connection;
+  /** page limit. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -40,10 +43,14 @@ export class SplService implements TokenService, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
-    if (url) {
-      this.state.connection = new Connection(url, 'confirmed');
-      this.logger.log('connection initialized');
+    if (!url) {
+      return; // 노드 미설정 → 스캔 skip
     }
+    this.state.maxScanRange = await getMaxScanRange(SOLANA_SCAN_RANGE_KEY);
+    this.state.connection = new Connection(url, 'confirmed');
+    this.logger.log(
+      `connection initialized (maxScanRange=${this.state.maxScanRange})`,
+    );
   }
 
   /** 노드 URL 조회. 현재는 환경변수지만 async 소스(DB/원격 설정)로 교체 가능. */
@@ -61,6 +68,7 @@ export class SplService implements TokenService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
+    const limit = this.state.maxScanRange!;
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 
@@ -73,7 +81,7 @@ export class SplService implements TokenService, OnModuleInit {
       for (const { pubkey } of tokenAccounts) {
         const sigs = await connection.getSignaturesForAddress(pubkey, {
           until: cursor ?? undefined,
-          limit: 1000,
+          limit,
         });
         if (sigs.length > 0 && newest === cursor) {
           newest = sigs[0].signature;

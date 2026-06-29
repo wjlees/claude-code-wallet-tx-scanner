@@ -1,8 +1,9 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { EthereumCommonService } from '../ethereum-common/ethereum-common.service';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
+import { getMaxScanRange } from '../parameter-store';
 import {
   EthereumBasedTokenType,
   ethereumBasedTokens,
@@ -22,6 +23,8 @@ interface EthereumTokenCommonState {
   config: EthereumBasedTokenType;
   /** 기반 EVM 자산 서비스(노드 web3 재사용). 없으면 스캔 skip. */
   baseAssetService?: EthereumCommonService;
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -31,12 +34,11 @@ interface EthereumTokenCommonState {
  * eth_getLogs 를 호출한다(새 노드를 만들지 않음). cursor=마지막 스캔 블록번호.
  * Transfer 이벤트에서 from/to(topic1/topic2)가 대상 주소면 in/out 으로 수집.
  */
-export class EthereumTokenCommonService implements TokenService {
+export class EthereumTokenCommonService implements TokenService, OnModuleInit {
   private readonly logger: Logger;
   private readonly state: EthereumTokenCommonState;
 
   readonly scanIntervalMs = 2000;
-  private readonly batchSize = 1000;
 
   constructor(
     private readonly tokenTypeId: number,
@@ -51,6 +53,15 @@ export class EthereumTokenCommonService implements TokenService {
     if (!baseAssetService) {
       this.logger.warn(
         `no base EthereumCommonService for baseAssetId=${config.baseAssetId}`,
+      );
+    }
+  }
+
+  /** 기반 노드(web3)가 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
+  async onModuleInit(): Promise<void> {
+    if (this.state.baseAssetService?.getWeb3()) {
+      this.state.maxScanRange = await getMaxScanRange(
+        `${this.networkName.toUpperCase()}_MAX_SCAN_RANGE`,
       );
     }
   }
@@ -87,7 +98,7 @@ export class EthereumTokenCommonService implements TokenService {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.batchSize - 1, head);
+    const to = Math.min(from + this.state.maxScanRange! - 1, head);
 
     const topics = addresses.map(toTopic);
     const txs: DetectedTx[] = [];

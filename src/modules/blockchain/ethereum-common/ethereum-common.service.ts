@@ -3,7 +3,7 @@ import Web3 from 'web3';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getNodeUrl } from '../parameter-store';
+import { getMaxScanRange, getNodeUrl } from '../parameter-store';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
@@ -14,6 +14,8 @@ interface EthereumCommonState {
   config: EthereumBasedAssetType;
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   web3?: Web3;
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  maxScanRange?: number;
 }
 
 /**
@@ -30,7 +32,6 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   private readonly state: EthereumCommonState;
 
   readonly scanIntervalMs = 2000;
-  private readonly batchSize = 1000;
 
   constructor(private readonly assetId: number) {
     const config = ethereumBasedAssets[assetId];
@@ -41,10 +42,17 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   /** 노드 핸들(web3) 초기화. URL 조회가 async 라서 생성자가 아닌 여기서 await 한다. */
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
-    if (url) {
-      this.state.web3 = new Web3(url);
-      this.logger.log(`web3 initialized @ ${this.networkName}`);
+    if (!url) {
+      return; // 노드 미설정 → 스캔 skip (range 도 불필요)
     }
+    // range 는 필수: 누락 시 throw → 이 자산은 초기화 실패(조용한 default 없음)
+    this.state.maxScanRange = await getMaxScanRange(
+      `${this.networkName.toUpperCase()}_MAX_SCAN_RANGE`,
+    );
+    this.state.web3 = new Web3(url);
+    this.logger.log(
+      `web3 initialized @ ${this.networkName} (maxScanRange=${this.state.maxScanRange})`,
+    );
   }
 
   /** 노드 URL 조회. parameter.json(→env) 에서 async 로 가져온다(추후 DB/원격 설정 교체 가능). */
@@ -89,7 +97,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.batchSize - 1, head);
+    const to = Math.min(from + this.state.maxScanRange! - 1, head);
 
     const watch = new Set(addresses.map((a) => a.toLowerCase()));
     const txs: DetectedTx[] = [];
