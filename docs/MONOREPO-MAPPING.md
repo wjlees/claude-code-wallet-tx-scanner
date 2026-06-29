@@ -13,15 +13,16 @@
 
 | 개념 | prototype | monorepo | 상태/비고 |
 |------|-----------|----------|----------|
-| 파라미터 조회 | `parameter-store.getParameter`/`getNodeUrl` (flat 키) | `paramStoreService.getParametersByPath(path)` (path별 객체) | ⚠️ **모델 다름 — §3 정렬 필요** |
-| 1회 스캔 범위 | `getMaxScanRange(<ASSET>_MAX_SCAN_RANGE)` (flat, 필수·throw) | `getParametersByPath(path).maxScanRange` → `parseInt`, undefined면 throw | ⚠️ **`maxScanRange` 로 통일 + path별로 변경 필요**. (legacy `scanBlocks` 의 `maxBlockScanSize` 는 코드 상수, tx-scanner 와 비공유) |
+| 파라미터 조회 | `parameter-store.getParametersByPath(path)` (path별 객체) | `paramStoreService.getParametersByPath(path)` | ✅ 모델 일치 |
+| 노드 URL 필드 | `getNodeUrlByPath(path)` → path 객체의 **`nodeUrl`** | path 객체의 자산별 필드(**`host`/`gethUrl` 등 자산마다 다름**) | ✅ **약속**: 의미는 동일(node RPC 주소). prototype 은 `nodeUrl` 로 통일, monorepo 는 자산별 필드 — 같은 것으로 취급 |
+| 1회 스캔 범위 | `getMaxScanRange(path)` (= `getParametersByPath(path).maxScanRange`, 필수·throw) | `getParametersByPath(path).maxScanRange` → `parseInt`, undefined면 throw | ✅ 일치. (legacy `scanBlocks` 의 `maxBlockScanSize` 는 별개 상수) |
 | 자산 식별 | `constants.AssetId.X` (값 임의) | `@gopax/proto` `IsoAlpha3ToAssetId.ISO_ALPHA3_X` | 심볼 정합만(값 무관) |
 | 토큰타입 식별 | `constants.TokenTypeId.X` (값 임의) | `@gopax/proto` `TokenTypeId` (KIP7=11,KONETTOKEN=20,BASETOKEN=21,SPL=9,TRC20=17) | 심볼 정합만 |
 | 토큰 저장 assetId | `detected-tx.mapper` `STUB_TOKEN_ASSET_ID`(1001+, tokenTypeId 기준) | **토큰 자체 assetId**(`main.asset` 행). `main.token(token_type_id, token_contract_address)` 로 contractAddress→assetId 해석 | ⚠️ **양쪽 다 미정렬**: monorepo mapper 도 현재 기반 체인 assetId 넣음. 목표=토큰 자체 assetId |
 | tx 저장 | `TxRepository`→`DetectedTransactionsRepository.insertDetectedTransactions`(stub) | 동명 repository (`main.detected_transactions`) | InsertParams 시그니처 정렬됨 |
-| 진행 지점 | `AssetRepository` = **`asset.start_block_number`**(stub) | **`wallet.wallet_scanner_asset.start_block_number`** (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ⚠️ **테이블 다름 — 정렬 필요** |
+| 진행 지점 | `WalletScannerAssetRepository` = `wallet_scanner_asset.start_block_number`(stub) | `wallet.wallet_scanner_asset.start_block_number` (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ✅ 일치. **키 = `asset_id` 단독**(중복 없음), 현재 `start_block_number` 만(컬럼 필요 시 추가) |
 | cursor(체인경계) | `ScanResult.nextCursor` (불투명) | 동일 | DB엔 start_block_number 로 저장 |
-| 스캔 계약 | `AssetService`/`TokenService` | `ScannableBlockchainService` 등록 자산 | |
+| 스캔 계약 | `AssetService`/`TokenService` (스캔 계약 직접 포함, 별도 Scannable 없음) | (현재) `ScannableService`+`ScannableAssetService`/`ScannableTokenService` + `isScannable*` 가드, `ScannableBlockchainService` | ⏳ **결정: monorepo 가 Scannable 제거하고 asset/token 인터페이스에 통합**(prototype 방식). §5-7 |
 | 부팅 게이트 | 없음(항상 ON) | `TX_SCANNER_ENABLED` flag | |
 
 ## 2. ParamStore path · 심볼 · TokenTypeId (monorepo tx-scanner 실제 대상)
@@ -50,11 +51,9 @@
 | spl | SPL(9) | `sol`(공유) | SOL |
 | trc20 | TRC20(17) | `trc20` | TRX |
 
-## 3. ⚠️ 자산 로스터 불일치 (중요)
-- **prototype 에만 있음**: `ETH`(ethereum), `POL`(polygon), `erc20` → monorepo tx-scanner(`ScannableBlockchainService`)에 **미등록**(wallet fork 에만 존재).
-- **monorepo tx-scanner 에만 있음**: `cross`, `base`(BASEETH), `konetToken`, `baseToken`.
-- Polygon: monorepo 는 `ISO_ALPHA3_MATIC`(path `polygon`), **`POL` 전용 enum 없음**.
-- 즉 prototype 의 자산 set 은 "예시"이고 monorepo 실제 set 과 다르다. 포팅 시 **로스터를 monorepo 기준으로 맞출지** 결정 필요.
+## 3. 자산 로스터 ✅ (2026-06-29 일치)
+prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xrp/xpla` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
+- 참고: monorepo wallet fork 에는 ETH/MATIC/WEMIX 등이 더 있으나 tx-scanner(`ScannableBlockchainService`) 미등록 → 로스터 제외.
 
 ## 4. 포팅 체크리스트 (커밋마다 — diff 대신 이걸 읽힘)
 ```
@@ -74,8 +73,14 @@
 3. ✅ **진행 지점 테이블**: `wallet_scanner_asset.start_block_number` 로 맞춤(`WalletScannerAssetRepository`). main.asset 와 분리.
 6. ✅ **자산 로스터**: monorepo 기준 일치 — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken, sol/spl/xlm/btc/bch/trx/trc20/xrp/xpla. (ETH/POL/erc20 제거)
 
+**monorepo 측 작업 예정 (prototype 은 이미 이 방식):**
+7. ⏳ **스캔 계약 인터페이스 통합**: monorepo 가 `ScannableService`/`ScannableAssetService`/`ScannableTokenService` + `isScannable*` 가드를 제거하고, 스캔 계약(symbol/scanIntervalMs/scanTransactions + getAssetId/getTokenTypeId)을 기존 asset/token 인터페이스에 합친다(prototype 방식). **⚠️ 선행 확인**: Scannable 분리가 "스캔 안 하는 자산을 가드로 거르려던 것"이면 단순 통합 불가 — 비스캔 자산 존재 여부 먼저 확인.
+
 **아직 양쪽 미정렬 (둘 다 작업 필요):**
 4. ⏳ **토큰 저장 assetId**: 목표=토큰 자체 assetId(`main.asset`), `main.token` 의 contractAddress→assetId 로 per-tx 해석. **양쪽 mapper 모두 현재 토큰타입 단위(기반/stub) — 미정렬.** prototype 은 stub assetId(1001+) 유지 + TODO.
 5. ⏳ **detected_transactions 멱등**: 양쪽 **미구현**. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후 구현.
+
+**해결 약속:**
+- **nodeUrl**: prototype `nodeUrl` ≡ monorepo path 객체의 자산별 URL 필드(`host`/`gethUrl` 등). 같은 의미(node RPC 주소)로 취급(§1).
 
 > 참고(심볼/값): `AssetId`/`TokenTypeId` 숫자값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).
