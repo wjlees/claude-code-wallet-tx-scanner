@@ -22,7 +22,8 @@
 | tx 저장 | `TxRepository`→`DetectedTransactionsRepository.insertDetectedTransactions`(stub) | 동명 repository (`main.detected_transactions`) | InsertParams 시그니처 정렬됨 |
 | 진행 지점 | `WalletScannerAssetRepository` = `wallet_scanner_asset.start_block_number`(stub) | `wallet.wallet_scanner_asset.start_block_number` (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ✅ 일치. **키 = `asset_id` 단독**(중복 없음), 현재 `start_block_number` 만(컬럼 필요 시 추가) |
 | cursor(체인경계) | `ScanResult.nextCursor` (불투명) | 동일 | DB엔 start_block_number 로 저장 |
-| 스캔 계약 | `AssetService`/`TokenService` (스캔 계약 직접 포함, 별도 Scannable 없음) | (현재) `ScannableService`+`ScannableAssetService`/`ScannableTokenService` + `isScannable*` 가드, `ScannableBlockchainService` | ⏳ **결정: monorepo 가 Scannable 제거하고 asset/token 인터페이스에 통합**(prototype 방식). §5-7 |
+| 스캔 계약 | `AssetService`/`TokenService` (스캔 계약 직접 포함) | `AssetService`/`TokenService` + `BlockchainService` (Scannable 제거 완료) | ✅ **일치**. monorepo 인터페이스는 출금/입금(scanBlocks 등) 메서드까지 포함해 prototype 보다 넓음(상위집합) |
+| 진입점 | `BlockchainService` | `BlockchainService` (`ScannableBlockchainService` 삭제됨) | ✅ 일치 |
 | 부팅 게이트 | 없음(항상 ON) | `TX_SCANNER_ENABLED` flag | |
 
 ## 2. ParamStore path · 심볼 · TokenTypeId (monorepo tx-scanner 실제 대상)
@@ -39,7 +40,7 @@
 | btc | ISO_ALPHA3_BTC | `btc` |
 | bch | ISO_ALPHA3_BCH | `bch` |
 | trx | ISO_ALPHA3_TRX | `tron` (path≠symbol) |
-| xrp | ISO_ALPHA3_XRP | `xrp` |
+| xrp | ISO_ALPHA3_XRP | `xrp` — ⚠️ monorepo 스캐너 **미등록**(추후 추가), prototype 만 스캔 |
 | xpla | ISO_ALPHA3_XPLA | `xpla` |
 
 **token**
@@ -52,8 +53,9 @@
 | trc20 | TRC20(17) | `trc20` | TRX |
 
 ## 3. 자산 로스터 ✅ (2026-06-29 일치)
-prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xrp/xpla` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
-- 참고: monorepo wallet fork 에는 ETH/MATIC/WEMIX 등이 더 있으나 tx-scanner(`ScannableBlockchainService`) 미등록 → 로스터 제외.
+prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xpla` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
+- ⚠️ **`xrp`: prototype 로스터엔 있으나 monorepo 스캐너/`BlockchainService` 미등록(추후 별도 추가 예정)** — 현재 유일한 로스터 차이.
+- 참고: monorepo wallet fork 에는 ETH/MATIC/WEMIX/FLR/ARBITRUM 등이 더 있으나 tx-scanner 미등록 → 로스터 제외. legacy 출금 전용 모듈(eth/pol/wemix/...)은 ethereum-common/token-common 으로 정리됨.
 
 ## 4. 포팅 체크리스트 (커밋마다 — diff 대신 이걸 읽힘)
 ```
@@ -73,8 +75,8 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 3. ✅ **진행 지점 테이블**: `wallet_scanner_asset.start_block_number` 로 맞춤(`WalletScannerAssetRepository`). main.asset 와 분리.
 6. ✅ **자산 로스터**: monorepo 기준 일치 — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken, sol/spl/xlm/btc/bch/trx/trc20/xrp/xpla. (ETH/POL/erc20 제거)
 
-**monorepo 측 작업 예정 (prototype 은 이미 이 방식):**
-7. ⏳ **스캔 계약 인터페이스 통합**: monorepo 가 `ScannableService`/`ScannableAssetService`/`ScannableTokenService` + `isScannable*` 가드를 제거하고, 스캔 계약(symbol/scanIntervalMs/scanTransactions + getAssetId/getTokenTypeId)을 기존 asset/token 인터페이스에 합친다(prototype 방식). **⚠️ 선행 확인**: Scannable 분리가 "스캔 안 하는 자산을 가드로 거르려던 것"이면 단순 통합 불가 — 비스캔 자산 존재 여부 먼저 확인.
+**계약 표면 정렬 완료 (2026-06-29, monorepo 반영됨):**
+7. ✅ **스캔 계약 인터페이스 통합**: monorepo 가 `Scannable*` 인터페이스 + `isScannable*` 가드 제거, 스캔 계약을 `AssetService`/`TokenService` 에 통합, `ScannableBlockchainService` 삭제 → `BlockchainService` 단일 진입점. legacy 출금 전용 모듈 정리. **양쪽 동일 구조.**
 
 **아직 양쪽 미정렬 (둘 다 작업 필요):**
 4. ⏳ **토큰 저장 assetId**: 목표=토큰 자체 assetId(`main.asset`), `main.token` 의 contractAddress→assetId 로 per-tx 해석. **양쪽 mapper 모두 현재 토큰타입 단위(기반/stub) — 미정렬.** prototype 은 stub assetId(1001+) 유지 + TODO.
