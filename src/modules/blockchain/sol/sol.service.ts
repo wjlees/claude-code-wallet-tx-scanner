@@ -28,7 +28,7 @@ interface SolState {
 @Injectable()
 export class SolService implements AssetService, OnModuleInit {
   readonly symbol = 'sol';
-  readonly scanIntervalMs = 500;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('SolService');
   private readonly state: SolState = {};
 
@@ -80,10 +80,10 @@ export class SolService implements AssetService, OnModuleInit {
         newest = sigs[0].signature;
       }
       for (const sig of sigs) {
+        // signature 만 수집. from/to·amount 는 getParsedTransaction 파싱 필요(TODO).
         txs.push({
           txHash: sig.signature,
-          address,
-          // TODO(RPC): getParsedTransaction 으로 in/out·amount·counterparty 판별.
+          blockNumber: sig.slot,
           raw: sig,
         });
       }

@@ -31,7 +31,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
   /** 런타임 상태는 흩뿌리지 말고 한곳(state)에 모은다. */
   private readonly state: EthereumCommonState;
 
-  readonly scanIntervalMs = 2000;
+  readonly scanIntervalMs = 10000;
 
   constructor(private readonly assetId: number) {
     const config = ethereumBasedAssets[assetId];
@@ -108,13 +108,21 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       const blockTxs = (block?.transactions ?? []) as any[];
       for (const tx of blockTxs) {
         if (typeof tx === 'string') continue; // hydrated=true 면 객체여야 함
-        const txFrom = tx.from ? String(tx.from).toLowerCase() : undefined;
-        const txTo = tx.to ? String(tx.to).toLowerCase() : undefined;
-        if (txTo && watch.has(txTo)) {
-          txs.push(this.toDetected(tx, 'in', tx.to, tx.from));
-        }
-        if (txFrom && watch.has(txFrom)) {
-          txs.push(this.toDetected(tx, 'out', tx.from, tx.to));
+        const fromAddress = tx.from ? String(tx.from).toLowerCase() : undefined;
+        const toAddress = tx.to ? String(tx.to).toLowerCase() : undefined;
+        // from/to 중 하나라도 감시 주소면 기록(in/out 의미부여는 저장 단계에서)
+        if (
+          (fromAddress && watch.has(fromAddress)) ||
+          (toAddress && watch.has(toAddress))
+        ) {
+          txs.push({
+            txHash: String(tx.hash),
+            fromAddress,
+            toAddress,
+            amount: tx.value !== undefined ? String(tx.value) : undefined,
+            blockNumber: n,
+            raw: tx,
+          });
         }
       }
     }
@@ -123,22 +131,6 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       `scanned blocks ${from}~${to} @ ${this.networkName} → ${txs.length} tx`,
     );
     return { txs, nextCursor: String(to) };
-  }
-
-  private toDetected(
-    tx: any,
-    direction: 'in' | 'out',
-    address: string,
-    counterparty?: string,
-  ): DetectedTx {
-    return {
-      txHash: String(tx.hash),
-      direction,
-      address,
-      counterparty: counterparty ? String(counterparty) : undefined,
-      amount: tx.value !== undefined ? String(tx.value) : undefined,
-      raw: tx,
-    };
   }
 
   async getBalance(address: string): Promise<string> {

@@ -26,7 +26,7 @@ interface XrpState {
 @Injectable()
 export class XrpService implements AssetService, OnModuleInit {
   readonly symbol = 'xrp';
-  readonly scanIntervalMs = 2000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('XrpService');
   private readonly state: XrpState = {};
 
@@ -80,17 +80,16 @@ export class XrpService implements AssetService, OnModuleInit {
         if (ledgerIndex > maxLedger) maxLedger = ledgerIndex;
         if (tx.TransactionType && tx.TransactionType !== 'Payment') continue;
 
-        const direction: 'in' | 'out' = tx.Account === address ? 'out' : 'in';
         txs.push({
           txHash: entry.hash ?? tx.hash,
-          direction,
-          address,
-          counterparty: direction === 'out' ? tx.Destination : tx.Account,
+          fromAddress: tx.Account,
+          toAddress: tx.Destination,
           amount: typeof tx.Amount === 'string' ? tx.Amount : undefined,
           memoId:
             tx.DestinationTag !== undefined
               ? String(tx.DestinationTag)
               : undefined,
+          blockNumber: ledgerIndex || undefined,
           raw: entry,
         });
       }

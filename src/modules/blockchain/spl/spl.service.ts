@@ -32,7 +32,7 @@ interface SplState {
 @Injectable()
 export class SplService implements TokenService, OnModuleInit {
   readonly symbol = 'spl';
-  readonly scanIntervalMs = 500;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('SplService');
   private readonly state: SplState = {};
 
@@ -89,11 +89,10 @@ export class SplService implements TokenService, OnModuleInit {
           newest = sigs[0].signature;
         }
         for (const sig of sigs) {
+          // signature 만 수집. from/to·amount·mint 는 getParsedTransaction 파싱 필요(TODO).
           txs.push({
             txHash: sig.signature,
-            address: owner,
-            counterparty: pubkey.toBase58(),
-            // TODO(RPC): getParsedTransaction 으로 in/out·amount·mint 판별.
+            blockNumber: sig.slot,
             raw: sig,
           });
         }

@@ -70,15 +70,13 @@ src/
     │   └── wallet.types.ts           # Wallet { assetIds:number[], addresses:string[] }
     └── tx-scanner/                  # 핵심: 무한 루프 주체 + tx 감지 + 저장
         ├── tx-scanner.module.ts      # BlockchainModule + WalletModule import, CURSOR_STORE provider
-        ├── tx-scanner.service.ts     # 대상별 ScanRunner 생성/구동 + @Cron 워치독 (cursorKey)
+        ├── tx-scanner.service.ts     # 대상별 ScanRunner 생성/구동 + setInterval 워치독 + saveDetected(직접 저장) + resolveStoreAssetId(stub)
         ├── scan-runner.ts            # 대상 1개의 독립 무한 루프(cursor load/save/sleep/graceful stop)
         ├── wallet-scanner-asset.repository.ts # wallet_scanner_asset.start_block_number(진행 지점) 인터페이스 + in-memory stub
-        ├── detected-transactions.repository.ts # detected_transactions 저장 인터페이스 + stub
-        ├── detected-tx.mapper.ts     # DetectedTx+ScanTarget → InsertParams 매핑, resolveStoreAssetId
-        └── tx.repository.ts          # mapper 변환 후 DetectedTransactionsRepository 로 저장
+        └── detected-transactions.repository.ts # detected_transactions 저장 인터페이스 + stub
 ```
 
-> 참고: 루트 `AppModule` 은 워치독 `@Cron` 활성화를 위해 `ScheduleModule.forRoot()` 를 import 한다.
+> 참고: 워치독은 `@Cron`(ScheduleModule) 대신 `TxScannerService` 의 `setInterval` 로 돈다(monorepo 는 scheduler_manager). 저장은 매퍼/TxRepository 없이 `saveDetected` 가 직접 한다(DetectedTx≈DB 컬럼).
 
 ### 데이터 흐름 (tx 스캔)
 
@@ -86,14 +84,14 @@ src/
 TxScannerService.onModuleInit()
   → BlockchainService.getAllAssetServices() / getAllTokenServices()  # 전 서비스 수집
   → 서비스마다 ScanRunner 1개 생성 후 start()   # 대상별 독립 무한 루프
-       루프 시작: startBlockNumber = AssetRepository.getStartBlockNumber(assetId)  # 마지막 지점부터 resume
+       루프 시작: startBlockNumber = WalletScannerAssetRepository.getStartBlockNumber(assetId)  # resume
        각 루프 반복:
          → WalletService.getScanAddresses(target)            # target→assetIds→주소 (DB 껍데기)
-         → service.scanTransactions(addresses, startBlockNumber) # 자산별 방식으로 in/out 감지(반환=불투명 nextCursor)
-         → TxRepository.saveMany(target, detectedTxs)        # 저장 (id 기준, DB 껍데기)
-         → updateStartBlockNumber(assetId, nextCursor)       # asset.start_block_number 갱신(stub)
-         → service.scanIntervalMs 만큼 대기
-  @Cron(EVERY_MINUTE) watchdog()  # 죽은/정체된 루프 점검·재시작 (스캔은 안 함)
+         → service.scanTransactions(addresses, startBlockNumber) # from/to 파싱(in/out 의미부여 X), 반환=불투명 nextCursor
+         → saveDetected(assetId, detectedTxs)                # DetectedTransactionsRepository 직접 저장 (매퍼 없음)
+         → updateStartBlockNumber(assetId, nextCursor)       # wallet_scanner_asset.start_block_number 갱신(stub)
+         → service.scanIntervalMs(=10s) 만큼 대기
+  setInterval(60s) watchdog()  # 죽은/정체된 루프 점검·재시작 (스캔 안 함, @Cron 아님)
 ```
 
 ---
@@ -102,29 +100,29 @@ TxScannerService.onModuleInit()
 
 **무한 루프의 주체는 tx-scanner**다. blockchain 서비스는 "스캔해서 tx 돌려주는" `scanTransactions(addresses, cursor)` 만 제공하고, 어떻게 스캔할지는 자산이 알아서 한다.
 
-- **자산별 독립 루프**: 자산마다 노드·스캔 방식·속도가 달라서([scanIntervalMs](#자산별-스캔-방식-요약)) 자산당 `ScanRunner` 를 하나씩 돌린다. 느린 체인(BTC)이 빠른 체인(SOL)을 막지 않는다(head-of-line blocking 방지).
-- **cron 워치독(안전망)**: 무한 루프는 실시간성이 높지만 죽으면 조용히 멈출 수 있다. `@Cron(EVERY_MINUTE)` 가 각 루프의 생존/정체를 점검해 재시작한다(스캔 자체는 안 함).
-- **커서 기반 증분**: 각 루프는 자산별 커서(불투명 문자열)를 들고 마지막 지점 이후만 스캔. DB 영속화하면 재시작 후 이어서 진행(at-least-once). 저장은 (symbol, txHash, address) 멱등.
+- **대상별 독립 루프**: 대상마다 `ScanRunner` 를 하나씩 돌린다(HOL blocking 방지). run 주기 `scanIntervalMs` 는 현재 전 자산 **10s** 통일.
+- **워치독(안전망)**: 무한 루프가 죽으면 조용히 멈출 수 있어, `setInterval(60s)` 가 각 루프의 생존/정체를 점검해 재시작한다(스캔 안 함). **`@Cron` 아님** — monorepo 는 scheduler_manager 가 등록·호출.
+- **진행지점 기반 증분**: 각 루프는 `wallet_scanner_asset.start_block_number`(불투명 값) 이후만 스캔. 재시작 후 이어서 진행(at-least-once).
 
 #### 왜 이 조합인가 (대안 비교)
-- **cron 단독**: 구현 단순하지만 실시간성↓(주기마다 몰아 처리), 자산별 cadence 조절 불가 → 탈락.
+- **스케줄러 단독**: 구현 단순하지만 실시간성↓ → 탈락.
 - **단일 무한 루프(전 자산 한 루프)**: 느린 체인이 빠른 체인을 막음(HOL blocking) → 탈락.
 - **자산별 무한 루프 단독**: 좋지만 루프가 죽으면 복구 수단이 없음.
-- **→ 채택: 자산별 무한 루프(평소) + cron 워치독(복구).** 실시간성·격리·복구를 모두 확보.
+- **→ 채택: 대상별 무한 루프(평소) + 주기 워치독(복구).**
 
-### 자산별 스캔 방식 요약
-| 자산 | scanTransactions 방식 | cursor 의미 | scanIntervalMs |
-|------|------|------|---|
-| ETH/POL/KLAY/KONET (EVM) | 블록 범위 순회, tx.from/to 매칭 | 블록번호 | 2000 |
-| erc20/kip7 (EVM 토큰) | `eth_getLogs` Transfer 필터, 기반 자산 노드 재사용 | 블록번호 | 2000 |
-| BTC/BCH (UTXO) | 블록 범위 vout 수신 매칭(공용 UtxoCommonService) | 블록번호 | 5000 |
-| SOL | 주소별 `getSignaturesForAddress` 페이징 | signature | 500 |
-| SPL | 토큰계정(mintAddress) signature 페이징 | signature | 500 |
-| XLM | Horizon `/accounts/{addr}/transactions` + memoId | paging_token | 1000 |
-| TRX | 블록 범위 TransferContract owner/to 매칭(tronweb) | 블록번호 | 3000 |
-| TRC20 | 블록 범위 TriggerSmartContract transfer 디코드(trx 노드 재사용) | 블록번호 | 3000 |
-| XRP | 주소별 `account_tx` ledger 범위(rippled JSON-RPC) | ledger index | 2000 |
-| XPLA | 블록 범위 Cosmos `transfer` 이벤트 매칭(LCD REST) | 블록높이 | 3000 |
+### 자산별 스캔 방식 요약 (run 주기 scanIntervalMs = 전부 10s)
+| 자산 | scanTransactions 방식 | cursor 의미 |
+|------|------|------|
+| konet/klay/cross/base (EVM) | 블록 범위 순회, tx.from/to 매칭 | 블록번호 |
+| kip7/konetToken/baseToken (EVM 토큰) | `eth_getLogs` Transfer 필터, 기반 자산 노드 재사용 | 블록번호 |
+| BTC/BCH (UTXO) | 블록 범위 vout 수신 매칭(공용 UtxoCommonService) | 블록번호 |
+| SOL | 주소별 `getSignaturesForAddress` 페이징(signature-only, from/to 미파싱) | signature |
+| SPL | 토큰계정 signature 페이징(signature-only) | signature |
+| XLM | Horizon `/accounts/{addr}/transactions` + memoId | paging_token |
+| TRX | 블록 범위 TransferContract from/to 매칭(tronweb) | 블록번호 |
+| TRC20 | 블록 범위 TriggerSmartContract transfer 디코드(trx 노드 재사용) | 블록번호 |
+| XRP | 주소별 `account_tx` ledger 범위(rippled JSON-RPC) | ledger index |
+| XPLA | 블록 범위 Cosmos `transfer` 이벤트 매칭(LCD REST) | 블록높이 |
 
 > 노드 RPC 메서드 상세 근거는 [`docs/fetching-transactions-by-node.md`](./docs/fetching-transactions-by-node.md).
 
@@ -248,10 +246,10 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 
 ## 다음 작업 후보 (TODO)
 
-- [ ] **DB 연동**: `WalletService.getScanAddresses` 가 실제 DB에서 hot/cold 주소를 조회하도록 교체. `TxRepository` 가 실제 tx 를 멱등 저장하도록 교체. **cursor 영속화**(자산별 마지막 스캔 지점 load/save) 추가.
-- [ ] **체인 RPC 연동**: 각 `*Service.scanTransactions` 의 `console.log` 껍데기를 실제 노드 호출로 교체(EVM 블록범위/getLogs, SOL getSignaturesForAddress, XLM Horizon, BTC/BCH watch-only).
+- [ ] **DB 연동**: `WalletService.getScanAddresses` 가 실제 DB에서 주소를 조회. `DetectedTransactionsRepository`/`WalletScannerAssetRepository` stub 을 실제 DB 로 교체.
+- [ ] **토큰 assetId / 멱등** (§5-6·§5-7): 토큰 detected.assetId 를 contractAddress→assetId 로, detected_transactions 멱등 unique index.
 - [ ] **스캔 취소 가능화**: `scanTransactions` 에 AbortController/timeout 도입 → 워치독이 hung RPC 를 끊고 재시작 가능하게.
-- [ ] **DetectedTx 매핑**: 각 자산이 실제 tx 를 `DetectedTx`(direction/counterparty/amount/memoId) 로 변환.
+- [ ] **from/to 파싱 보강**: SOL/SPL signature-only → getParsedTransaction 으로 fromAddress/toAddress 채우기.
 - [ ] **API/트리거**: 외부에서 스캔 상태 조회/수동 트리거할 컨트롤러.
 
 ---
@@ -270,6 +268,7 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 - **2026-06-25**: **지갑/저장도 숫자 id 기준으로 통일**. `ScanTarget` 을 `blockchain/interfaces/scan.types.ts` 공용 타입으로 이동(중복 제거). `WalletService.getScanAddresses(symbol)` → `getScanAddresses(target: ScanTarget)`: target → assetId 목록 해석(토큰이면 기반 assetId 들, 둘 다면 합집합) 후 주소 수집. `Wallet` 타입 재설계 — `{ assetIds:number[], addresses:string[] }`(symbol·`WalletType`(HOT/COLD)·단일 address·string id 제거). `TxRepository.saveMany(symbol,…)` → `saveMany(target,…)`. 검증: tokenTypeId 1/2/3/4 → assetIds [1]/[3]/[5]/[9]; EVM assetId 는 2개 주소, 비EVM 은 0개(이전 stub 주소 형식 에러 해소).
 - **2026-06-25**: **cursor 영속화 + 파라미터 스토어**. (1) `CursorStore` 도입(`tx-scanner/cursor-store.ts`) — `JsonCursorStore` 가 `.data/cursors.json` 에 대상별 cursor 저장. `ScanRunner` 가 시작 시 `load`(resume), 사이클마다 `save`. key=`asset:<id>`/`token:<id>`. `CURSOR_STORE` 토큰 주입, DB 교체 대비 인터페이스 유지. 검증: 5초 스캔 후 cursors.json 기록 → 재시작 시 `resume from cursor=…` 확인. (2) 노드 URL 조회를 `parameter-store.ts`(async `getParameter`/`getNodeUrl`)로 이전 — 소스 `parameter.json`(gitignore)→env 폴백, `node-config.ts` 는 `warnMissingNode` 만 남김. 전 서비스 `resolveNodeUrl`/UtxoCommonService 가 await 조회. 검증: parameter.json 값이 env 보다 우선함 확인.
 - **2026-06-29**: **진행 지점 영속화를 `asset` 테이블 모델로**. `CursorStore`/`JsonCursorStore`(`.data/cursors.json`) 제거 → `AssetRepository`(`asset.start_block_number`) + `StubAssetRepository`(in-memory, `ASSET_REPOSITORY` 토큰). `ScanRunner` 가 `getStartBlockNumber(assetId)`/`updateStartBlockNumber(assetId, …)` 로 load/save(행 키=`resolveStoreAssetId(target)`, 토큰=토큰 자체 assetId). 용어 `cursor`→**`startBlockNumber`**(저장 컬럼명 정렬; 체인 경계의 반환값은 여전히 불투명 `nextCursor`). `Asset` 스키마: id/iso_alpha3(symbol)/full_name(한글)/scale(≤8)/start_block_number/confirm_threshold. 검증: 부팅 시 get→null→scan→update(asset#1←25420998, 토큰 asset#1001 분리 저장) 확인. ⚠️ stub 은 in-memory 라 재시작 시 초기화(실제 DB 연결 시 영속).
+- **2026-06-30**: **DetectedTx in/out 제거 + 매퍼/TxRepository 제거 + 워치독 setInterval + run 10s** (monorepo 정렬). (1) `DetectedTx` 를 `{fromAddress?, toAddress?, amount?, memoId?, blockNumber?}` 로(direction/address/counterparty 제거) — in/out 의미부여는 저장/조회 단계로. 전 스캐너가 from/to 단일 push(EVM/TRX/TRC20/XPLA 는 in/out 이중 push 제거, dedupe). SOL/SPL 은 signature-only 라 from/to 생략. (2) `detected-tx.mapper.ts`·`tx.repository.ts` 제거 → `TxScannerService.saveDetected` 가 `DetectedTransactionsRepository` 에 직접 저장(DetectedTx≈DB 컬럼). `resolveStoreAssetId` 는 tx-scanner 로 이동(stub; monorepo 는 assetRepository/tokenRepository). (3) 워치독 `@Cron`→`setInterval`, `ScheduleModule` 제거(monorepo=scheduler_manager). (4) run 주기 `scanIntervalMs` 전 자산 10s 통일. 검증: build/lint, 루프 interval=10000ms, saveDetected 출력 `{fromAddress,toAddress,txId,…}`.
 - **2026-06-30**: **maxScanRange 미설정 정책: throw → log+skip** (monorepo 정렬). `getMaxScanRange(path)` 가 미설정/0이하면 throw 대신 `undefined` 반환. 각 서비스 `onModuleInit` 은 노드 URL+maxScanRange 둘 다 있을 때만 핸들 초기화하고, 없으면 `no maxScanRange for "<path>" — scan skipped` 로그 후 skip(앱 부팅은 계속). 위임형(token/trc20/btc/bch)은 scanTransactions 에서도 maxScanRange undefined 면 skip. 검증: konet maxScanRange 제거 후 부팅 → 크래시 없이 konet 만 skip 확인.
 - **2026-06-29**: **monorepo 동기화 — XPLA REST + detected_transactions + maxScanRange**. (1) **XPLA `@xpla/xpla.js` 제거** — top-level import 만으로 부팅 크래시(`@xpla/xpla.proto` v2 누락)라 `XplaRestClient`(Cosmos LCD REST, `query=tx.height%3D{h}`)로 교체. live 22 tx 파싱 확인. (2) **tx 저장 연동** — `DetectedTransactionsRepository` 인터페이스 + `StubDetectedTransactionsRepository`(`DETECTED_TRANSACTIONS_REPOSITORY` 토큰) + `mapDetectedTxToInsertParams(target, tx)` 매퍼 추가. `TxRepository` 가 매핑 후 저장. 토큰은 **자체 assetId**(stub 1001+, 실제 DB token→assetId). (3) **scan range ParamStore화(필수값)** — `getMaxScanRange(<ASSET>_MAX_SCAN_RANGE)` 로 전 체인 batch/limit 을 조회. **코드 default 없음 — 미설정 시 throw**(노드 있는 자산은 `onModuleInit` 에서 range 까지 조회해 state 저장, 누락 시 초기화 실패). parameter.json 에 `<ASSET>_MAX_SCAN_RANGE` 명시 필수(EVM/SOL=1000, XLM/XRP=200, BTC/BCH=50, TRX=20, XPLA=10). 검증: init 로그에 maxScanRange 표시, 키 누락 시 throw 확인. (4) ef1dd24(Buffer/Uint8Array, getTransaction)는 prototype 에 서명/전송 코드가 없어 해당 없음.
 - **2026-06-29**: **monorepo 로스터·ParamStore·진행지점 테이블 정렬** (회사 AI 답변 Q1~Q4 반영). (1) **ParamStore path 모델** — `getParametersByPath(path)` + parameter.json 을 path별 `{nodeUrl,maxScanRange}` 객체로. `getNodeUrlByPath`/`getMaxScanRange(path)`. path 는 monorepo 와 일치(trx→`tron`, klaytn→`klay`, base(BASEETH)→`base`). (2) **진행지점 테이블** `asset` → **`wallet_scanner_asset`**(`WalletScannerAssetRepository`, main.asset 분리). (3) **자산 로스터 monorepo 일치** — EVM `konet/klay/cross/base` + 토큰 `kip7/konetToken/baseToken` (`ETH/POL/erc20` 제거, cross 는 EVM). `AssetId`/`TokenTypeId` 재정의. (4) 토큰 저장 assetId(contractAddress→assetId)는 양쪽 미정렬이라 stub(1001+) 유지(TODO). 검증: assetIds 1~11·tokenTypeIds 1~5, klay/konet web3 init + path별 maxScanRange, build/lint/부팅. 매핑: docs/MONOREPO-MAPPING.md §2·§5.

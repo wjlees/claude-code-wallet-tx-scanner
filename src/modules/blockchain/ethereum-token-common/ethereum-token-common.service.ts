@@ -38,7 +38,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
   private readonly logger: Logger;
   private readonly state: EthereumTokenCommonState;
 
-  readonly scanIntervalMs = 2000;
+  readonly scanIntervalMs = 10000;
 
   constructor(
     private readonly tokenTypeId: number,
@@ -103,27 +103,25 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     const to = Math.min(from + maxScanRange - 1, head);
 
     const topics = addresses.map(toTopic);
-    const txs: DetectedTx[] = [];
 
-    // 들어오는 전송: topic2(to) 가 대상 주소
+    // to(topic2) 또는 from(topic1) 이 감시 주소인 Transfer 로그 수집 후 dedupe
     const incoming = await web3.eth.getPastLogs({
       fromBlock: from,
       toBlock: to,
       topics: [TRANSFER_TOPIC, null, topics],
     } as any);
-    for (const log of incoming as any[]) {
-      txs.push(this.toDetected(log, 'in'));
-    }
-
-    // 나가는 전송: topic1(from) 이 대상 주소
     const outgoing = await web3.eth.getPastLogs({
       fromBlock: from,
       toBlock: to,
       topics: [TRANSFER_TOPIC, topics],
     } as any);
-    for (const log of outgoing as any[]) {
-      txs.push(this.toDetected(log, 'out'));
+
+    const byKey = new Map<string, DetectedTx>();
+    for (const log of [...(incoming as any[]), ...(outgoing as any[])]) {
+      const key = `${log.transactionHash}:${log.logIndex}`;
+      if (!byKey.has(key)) byKey.set(key, this.toDetected(log));
     }
+    const txs = [...byKey.values()];
 
     this.logger.log(
       `scanned ${this.symbol} logs ${from}~${to} @ ${this.networkName} → ${txs.length} transfer`,
@@ -131,21 +129,18 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     return { txs, nextCursor: String(to) };
   }
 
-  private toDetected(log: any, direction: 'in' | 'out'): DetectedTx {
-    const fromAddr = log.topics?.[1]
-      ? '0x' + String(log.topics[1]).slice(26)
-      : undefined;
-    const toAddr = log.topics?.[2]
-      ? '0x' + String(log.topics[2]).slice(26)
-      : undefined;
-    const self = direction === 'in' ? toAddr : fromAddr;
-    const counterparty = direction === 'in' ? fromAddr : toAddr;
+  private toDetected(log: any): DetectedTx {
     return {
       txHash: String(log.transactionHash),
-      direction,
-      address: self ?? '',
-      counterparty,
+      fromAddress: log.topics?.[1]
+        ? '0x' + String(log.topics[1]).slice(26)
+        : undefined,
+      toAddress: log.topics?.[2]
+        ? '0x' + String(log.topics[2]).slice(26)
+        : undefined,
       amount: log.data ? BigInt(log.data).toString() : undefined,
+      blockNumber:
+        log.blockNumber !== undefined ? Number(log.blockNumber) : undefined,
       raw: log,
     };
   }

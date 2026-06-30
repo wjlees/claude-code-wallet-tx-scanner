@@ -70,16 +70,17 @@ export class UtxoRpcClient {
             : (spk.addresses ?? []);
           const hit = outAddrs.find((a) => watch.has(a));
           if (hit) {
+            // vout 수신자 = toAddress. 보낸 주소(fromAddress)는 prevout 추적 필요(TODO) → 생략.
             txs.push({
               txHash: tx.txid,
-              direction: 'in',
-              address: hit,
+              toAddress: hit,
               amount: vout.value !== undefined ? String(vout.value) : undefined,
+              blockNumber: height,
               raw: tx,
             });
           }
         }
-        // TODO(RPC): 'out' 감지는 vin.prevout 추적 또는 watch-only listsinceblock 사용.
+        // TODO(RPC): fromAddress(보낸 주소) 는 vin.prevout 추적 또는 watch-only listsinceblock 사용.
       }
     }
     return txs;

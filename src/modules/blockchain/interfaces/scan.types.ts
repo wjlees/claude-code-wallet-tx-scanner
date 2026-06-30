@@ -11,23 +11,26 @@ export interface ScanTarget {
   tokenTypeId?: number;
 }
 
-/** 스캔으로 감지된 트랜잭션 (자산 공통 표현) */
+/**
+ * 스캔으로 감지된 트랜잭션 (자산 공통 표현).
+ *
+ * 블록에서 **있는 그대로 파싱한 값**만 담는다. in/out(방향) 같은 의미부여는 하지 않는다 —
+ * from/to 만 기록하고, in/out 해석은 저장/조회 단계에서 지갑 주소와 대조해 판단한다.
+ * 체인별로 from/to 를 모를 수 있다(예: SOL signature-only → 둘 다 생략).
+ */
 export interface DetectedTx {
   /** 트랜잭션 해시/식별자 (체인에서 유일) */
   txHash: string;
-  /**
-   * 대상 주소 기준 방향. 판별 가능한 자산(EVM/BTC/XLM)은 채우고,
-   * 추가 파싱이 필요한 자산(SOL 등)은 비워둘 수 있다.
-   */
-  direction?: 'in' | 'out';
-  /** 대상(우리) 주소 */
-  address: string;
-  /** 상대 주소 (가능한 경우) */
-  counterparty?: string;
+  /** 보낸 주소 (파싱 가능 시) */
+  fromAddress?: string;
+  /** 받는 주소 (파싱 가능 시) */
+  toAddress?: string;
   /** 금액 (문자열, 최소단위) */
   amount?: string;
-  /** 입금 식별용 memoId 등 (XLM 등) */
+  /** 입금 식별용 memoId/DestinationTag 등 */
   memoId?: string;
+  /** 블록번호 / ledger index 등 (있으면) */
+  blockNumber?: number;
   /** 체인에서 받아온 원본 */
   raw: unknown;
 }

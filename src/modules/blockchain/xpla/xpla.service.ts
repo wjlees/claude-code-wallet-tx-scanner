@@ -30,7 +30,7 @@ interface XplaState {
 @Injectable()
 export class XplaService implements AssetService, OnModuleInit {
   readonly symbol = 'xpla';
-  readonly scanIntervalMs = 3000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('XplaService');
   private readonly state: XplaState = {};
 
@@ -88,30 +88,16 @@ export class XplaService implements AssetService, OnModuleInit {
         for (let i = 0; i < recipients.length; i++) {
           const recipient = recipients[i];
           const sender = senders[i];
-          const amount = amounts[i];
-          if (watch.has(recipient)) {
-            txs.push(
-              this.toDetected(
-                txr.txhash,
-                'in',
-                recipient,
-                sender,
-                amount,
-                memo,
-              ),
-            );
-          }
-          if (sender && watch.has(sender)) {
-            txs.push(
-              this.toDetected(
-                txr.txhash,
-                'out',
-                sender,
-                recipient,
-                amount,
-                memo,
-              ),
-            );
+          if (watch.has(recipient) || (sender && watch.has(sender))) {
+            txs.push({
+              txHash: txr.txhash,
+              fromAddress: sender,
+              toAddress: recipient,
+              amount: amounts[i],
+              memoId: memo,
+              blockNumber: n,
+              raw: { txhash: txr.txhash },
+            });
           }
         }
       }
@@ -141,25 +127,6 @@ export class XplaService implements AssetService, OnModuleInit {
       collect(txr.events); // sdk 0.50+: tx_response.events
     }
     return out;
-  }
-
-  private toDetected(
-    txhash: string,
-    direction: 'in' | 'out',
-    address: string,
-    counterparty: string | undefined,
-    amount: string | undefined,
-    memoId: string | undefined,
-  ): DetectedTx {
-    return {
-      txHash: txhash,
-      direction,
-      address,
-      counterparty,
-      amount,
-      memoId,
-      raw: { txhash },
-    };
   }
 
   async getBalance(address: string): Promise<string> {

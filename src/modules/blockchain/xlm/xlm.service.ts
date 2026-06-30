@@ -27,7 +27,7 @@ interface XlmState {
 @Injectable()
 export class XlmService implements AssetService, OnModuleInit {
   readonly symbol = 'xlm';
-  readonly scanIntervalMs = 1000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('XlmService');
   private readonly state: XlmState = {};
 
@@ -80,15 +80,15 @@ export class XlmService implements AssetService, OnModuleInit {
 
       for (const record of page.records) {
         nextCursor = record.paging_token;
+        // tx 레벨엔 source_account(from)만 명확. destination 은 operation 파싱 필요(TODO).
+        // 스캔 대상 계정이 sender 가 아니면 수신자(to)로 본다(best-effort).
+        const fromAddress = record.source_account;
         txs.push({
           txHash: record.hash,
-          direction: record.source_account === address ? 'out' : 'in',
-          address,
-          counterparty:
-            record.source_account === address
-              ? undefined
-              : record.source_account,
+          fromAddress,
+          toAddress: fromAddress === address ? undefined : address,
           memoId: (record as any).memo,
+          blockNumber: (record as any).ledger,
           raw: record,
         });
       }

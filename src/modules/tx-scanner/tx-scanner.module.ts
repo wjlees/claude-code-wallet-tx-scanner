@@ -10,13 +10,11 @@ import {
   StubWalletScannerAssetRepository,
 } from './wallet-scanner-asset.repository';
 import { TxScannerService } from './tx-scanner.service';
-import { TxRepository } from './tx.repository';
 
 @Module({
   imports: [BlockchainModule, WalletModule],
   providers: [
     TxScannerService,
-    TxRepository,
     // 스캔 진행 지점(wallet_scanner_asset.start_block_number) 저장소(현재 in-memory stub).
     {
       provide: WALLET_SCANNER_ASSET_REPOSITORY,

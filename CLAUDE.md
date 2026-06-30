@@ -61,11 +61,12 @@
 ## 3-1. 스캔 책임 경계 규칙
 - **무한 루프의 주체는 tx-scanner** 다. blockchain 서비스는 루프를 갖지 않는다(과거 EVM 서비스의 in-service 루프는 제거됨).
 - blockchain 서비스는 `scanTransactions(addresses, cursor) → { txs, nextCursor }` 만 제공한다. **어떻게 스캔할지는 자산이 결정**(EVM/BTC/TRX/TRC20/XPLA=블록범위, SOL/SPL=signature, XLM=Horizon+memoId, XRP=ledger account_tx). cursor 는 자산별 불투명 문자열.
-- tx-scanner 는 대상마다 `ScanRunner` 를 하나씩 돌린다(대상별 독립 루프, `scanIntervalMs` 로 cadence 분리). 죽은/정체 루프는 `@Cron` 워치독이 점검·재시작한다(워치독은 스캔 안 함). `@Cron` 은 `ScheduleModule.forRoot()`(AppModule) 필요.
+- tx-scanner 는 대상마다 `ScanRunner` 를 하나씩 돌린다(대상별 독립 루프). 현재 run 주기 `scanIntervalMs` 는 전 자산 10s. 죽은/정체 루프는 워치독이 점검·재시작한다(스캔 안 함). **워치독은 `@Cron` 이 아니라 `setInterval`** 로 주기 호출한다(monorepo 는 scheduler_manager 가 등록·호출 — §6). `ScheduleModule` 불필요.
 - `ScanRunner` 의 대상은 `ScanTarget { assetId?, tokenTypeId? }` — **둘 중 최소 하나 필수**(둘 다 없으면 생성자에서 throw). 보통 자산은 `{assetId}`, 토큰은 `{tokenTypeId}` 로 1개씩 돈다. **둘 다 지정 = 한 스캔으로 자산+토큰 동시 감지(통합 러너)** 여지를 위한 것(예: SOL ownerAddress + SPL ATA 를 한 번에). 현재는 단일 식별만 사용.
-- 저장(`TxRepository`)과 cursor 영속화는 tx-scanner 책임. blockchain 모듈은 DB 에 의존하지 않는다(규칙 1 유지).
+- tx 저장(`detected_transactions`)과 진행지점 영속화(`wallet_scanner_asset`)는 tx-scanner 책임. blockchain 모듈은 DB 에 의존하지 않는다(규칙 1 유지).
 - **스캔 진행 지점 영속화(`startBlockNumber`)**: 과거 "cursor" 개념의 저장값. `ScanRunner` 는 시작 시 `WalletScannerAssetRepository.getStartBlockNumber(assetId)` 로 마지막 지점을 읽고, 사이클마다 `updateStartBlockNumber(assetId, …)` 한다(at-least-once). 저장 위치는 **`wallet_scanner_asset` 테이블의 `start_block_number`**(main.asset 메타와 분리). 행 키 = `resolveStoreAssetId(target)`(토큰은 토큰타입 stub assetId 1001+). 체인 경계(`scanTransactions`) 반환값은 불투명 `cursor`(블록번호/signature/ledger)이고 `ScanRunner` 가 이를 `startBlockNumber` 로 받아 저장. 현재 `StubWalletScannerAssetRepository`(in-memory) — `WALLET_SCANNER_ASSET_REPOSITORY` 토큰 주입, 실제 DB 교체 시 인터페이스 유지. **stub 은 in-memory 라 재시작 시 초기화.**
-- **tx 저장**: `TxRepository.saveMany(target, txs)` → `mapDetectedTxToInsertParams` → `DetectedTransactionsRepository.insertDetectedTransactions`(`detected_transactions`). 현재 `StubDetectedTransactionsRepository`(콘솔). 매핑: direction 으로 from/to, `txHash→txId`, `memoId→note`, `amount ?? '0'`. 저장 assetId: 자산=코인 assetId. **토큰 목표=토큰 자체 assetId(contractAddress→main.token 조회), 현재는 토큰타입 stub(1001+) — 양쪽(prototype·monorepo) 미정렬, TODO(DB).** 멱등 `(assetId, txId, from/toAddress)` 도 양쪽 미구현(TODO).
+- **`DetectedTx` 는 in/out 의미부여를 하지 않는다**: 블록에서 파싱한 `fromAddress`/`toAddress`(+amount/memoId/blockNumber)만 담는다(direction/address/counterparty 없음). in/out 해석은 저장/조회 단계에서 지갑 주소와 대조해 한다. 체인별 from/to 를 모를 수 있다(SOL signature-only → 생략).
+- **tx 저장**: 별도 매퍼·`TxRepository` 없이 `TxScannerService.saveDetected(assetId, txs)` 가 `DetectedTx` 를 그대로 `DetectedTransactionsRepository.insertDetectedTransactions` 로 넣는다(DetectedTx≈DB 컬럼: `txHash→txId`, `amount ?? '0'`, `memoId→note`). 현재 `StubDetectedTransactionsRepository`(콘솔). 저장 assetId 는 `resolveStoreAssetId(target)` **stub**(자산=코인 assetId, 토큰=1001+) — **monorepo 는 assetRepository/tokenRepository 로 실제 assetId 조회**(§5-6, 양쪽 미정렬). 멱등 `(assetId, txId, from/toAddress)` 도 양쪽 미구현(TODO).
 - **scan range**: 1회 스캔 처리량은 `parameter-store` 의 `getMaxScanRange(path)`(= `getParametersByPath(path).maxScanRange`)로 조회. 코드 default 없음. **미설정/0이하면 `undefined` 반환 → 노드 미설정과 동일하게 log 후 skip(throw 안 함, 앱 부팅 계속)**. 각 서비스가 `onModuleInit` 에서 노드 URL+range 둘 다 있을 때만 핸들 초기화(둘 중 하나 없으면 그 자산 루프만 조용히 skip). 권장값: EVM/SOL=1000, XLM/XRP=200, BTC/BCH=50, TRX/TRC20=20, XPLA=10 (parameter.json path 별).
 
 ## 3-2. 노드 연동 규칙
@@ -82,6 +83,6 @@
 
 ## 5. 도메인 메모
 - 스캔 대상 주소는 실제로는 DB 에서 조회한다. `Wallet` 은 `{ assetIds:number[], addresses:string[] }` — 식별은 **숫자 assetId**(symbol/HOT·COLD 구분 없음, 감지할 주소면 hot/cold/기타 무관). EVM 동일 주소가 여러 체인을 커버하므로 `assetIds` 는 배열.
-- 주소/저장 조회 기준은 **`ScanTarget { assetId?, tokenTypeId? }`**(symbol 아님). `WalletService.getScanAddresses(target)` 는 target → assetId 목록으로 해석(토큰이면 기반 assetId 들 조회, 둘 다면 합집합) 후 주소를 모은다. `TxRepository.saveMany(target, txs)` 도 동일 기준.
+- 주소/저장 조회 기준은 **`ScanTarget { assetId?, tokenTypeId? }`**(symbol 아님). `WalletService.getScanAddresses(target)` 는 target → assetId 목록으로 해석(토큰이면 기반 assetId 들 조회, 둘 다면 합집합) 후 주소를 모은다. 저장 assetId 는 `resolveStoreAssetId(target)`.
 - tx-scanner 의 책임: 대상 주소의 **모든 in/out tx 를 감지하여 저장**. 자산(AssetService) + 토큰(TokenService) 모두 대상.
 - 자산별 특성: EVM=nonce/계정·블록범위, BTC/BCH=UTXO, XLM=memoId 입금 식별, SOL/SPL=mintAddress·빠른 signature 스캔. 이 차이를 blockchain 서비스가 캡슐화한다.

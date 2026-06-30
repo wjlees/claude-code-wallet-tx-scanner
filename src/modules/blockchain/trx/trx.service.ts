@@ -28,7 +28,7 @@ interface TrxState {
 @Injectable()
 export class TrxService implements AssetService, OnModuleInit {
   readonly symbol = 'trx';
-  readonly scanIntervalMs = 3000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('TrxService');
   private readonly state: TrxState = {};
 
@@ -87,42 +87,30 @@ export class TrxService implements AssetService, OnModuleInit {
         const contract = tx.raw_data?.contract?.[0];
         if (!contract || contract.type !== 'TransferContract') continue;
         const v = contract.parameter?.value ?? {};
-        const ownerAddr = v.owner_address
+        const fromAddress = v.owner_address
           ? tronWeb.address.fromHex(v.owner_address)
           : undefined;
-        const toAddr = v.to_address
+        const toAddress = v.to_address
           ? tronWeb.address.fromHex(v.to_address)
           : undefined;
-        if (toAddr && watch.has(toAddr)) {
-          txs.push(this.toDetected(tx.txID, 'in', toAddr, ownerAddr, v.amount));
-        }
-        if (ownerAddr && watch.has(ownerAddr)) {
-          txs.push(
-            this.toDetected(tx.txID, 'out', ownerAddr, toAddr, v.amount),
-          );
+        if (
+          (fromAddress && watch.has(fromAddress)) ||
+          (toAddress && watch.has(toAddress))
+        ) {
+          txs.push({
+            txHash: tx.txID,
+            fromAddress,
+            toAddress,
+            amount: v.amount !== undefined ? String(v.amount) : undefined,
+            blockNumber: n,
+            raw: { txID: tx.txID },
+          });
         }
       }
     }
 
     this.logger.log(`scanned blocks ${from}~${to} (TRX) → ${txs.length} tx`);
     return { txs, nextCursor: String(to) };
-  }
-
-  private toDetected(
-    txID: string,
-    direction: 'in' | 'out',
-    address: string,
-    counterparty?: string,
-    amount?: number,
-  ): DetectedTx {
-    return {
-      txHash: txID,
-      direction,
-      address,
-      counterparty,
-      amount: amount !== undefined ? String(amount) : undefined,
-      raw: { txID },
-    };
   }
 
   async getBalance(address: string): Promise<string> {
