@@ -14,7 +14,7 @@ interface EthereumCommonState {
   config: EthereumBasedAssetType;
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   web3?: Web3;
-  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxScanRange?: number;
 }
 
@@ -45,11 +45,18 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip (range 도 불필요)
     }
-    // range 는 필수: 누락 시 throw → 이 자산은 초기화 실패(조용한 default 없음)
-    this.state.maxScanRange = await getMaxScanRange(this.state.config.path);
+    // maxScanRange 미설정 → 노드 미설정과 동일하게 log 후 skip (throw 안 함, 부팅은 계속)
+    const range = await getMaxScanRange(this.state.config.path);
+    if (range === undefined) {
+      this.logger.log(
+        `no maxScanRange for "${this.state.config.path}" — scan skipped`,
+      );
+      return;
+    }
+    this.state.maxScanRange = range;
     this.state.web3 = new Web3(url);
     this.logger.log(
-      `web3 initialized @ ${this.networkName} (maxScanRange=${this.state.maxScanRange})`,
+      `web3 initialized @ ${this.networkName} (maxScanRange=${range})`,
     );
   }
 

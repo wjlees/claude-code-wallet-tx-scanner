@@ -17,7 +17,7 @@ const TOKEN_PROGRAM_ID = new PublicKey(
 interface SplState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   connection?: Connection;
-  /** page limit. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxScanRange?: number;
 }
 
@@ -45,11 +45,14 @@ export class SplService implements TokenService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(SOL_PATH);
+    const range = await getMaxScanRange(SOL_PATH);
+    if (range === undefined) {
+      this.logger.log(`no maxScanRange for "${SOL_PATH}" — scan skipped`);
+      return;
+    }
+    this.state.maxScanRange = range;
     this.state.connection = new Connection(url, 'confirmed');
-    this.logger.log(
-      `connection initialized (maxScanRange=${this.state.maxScanRange})`,
-    );
+    this.logger.log(`connection initialized (maxScanRange=${range})`);
   }
 
   /** 노드 URL 조회. ParamStore path 기준 async 조회(SOL 노드 공유). */

@@ -25,16 +25,22 @@ export class Trc20Service implements TokenService, OnModuleInit {
   readonly symbol = 'trc20';
   readonly scanIntervalMs = 3000;
   private readonly logger = new Logger('Trc20Service');
-  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   private maxScanRange?: number;
 
   constructor(private readonly trx: TrxService) {}
 
-  /** 기반 TRX 노드가 있으면 scan range 를 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** 기반 TRX 노드가 있을 때 scan range 조회. 없으면 log+skip. */
   async onModuleInit(): Promise<void> {
-    if (this.trx.getTronWeb()) {
-      this.maxScanRange = await getMaxScanRange(TRC20_PATH);
+    if (!this.trx.getTronWeb()) {
+      return;
     }
+    const range = await getMaxScanRange(TRC20_PATH);
+    if (range === undefined) {
+      this.logger.log(`no maxScanRange for "${TRC20_PATH}" — scan skipped`);
+      return;
+    }
+    this.maxScanRange = range;
   }
 
   getTokenTypeId(): number {
@@ -46,7 +52,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
     cursor: string | null,
   ): Promise<ScanResult> {
     const tronWeb = this.trx.getTronWeb();
-    if (!tronWeb) {
+    if (!tronWeb || this.maxScanRange === undefined) {
       warnMissingNode(this.logger, TRC20_PATH);
       return { txs: [], nextCursor: cursor };
     }
@@ -56,7 +62,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.maxScanRange! - 1, head);
+    const to = Math.min(from + this.maxScanRange - 1, head);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];

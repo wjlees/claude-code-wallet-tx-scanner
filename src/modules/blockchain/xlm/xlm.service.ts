@@ -12,7 +12,7 @@ const XLM_PATH = 'xlm';
 interface XlmState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   server?: Horizon.Server;
-  /** page limit. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxScanRange?: number;
 }
 
@@ -40,11 +40,14 @@ export class XlmService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    this.state.maxScanRange = await getMaxScanRange(XLM_PATH);
+    const range = await getMaxScanRange(XLM_PATH);
+    if (range === undefined) {
+      this.logger.log(`no maxScanRange for "${XLM_PATH}" — scan skipped`);
+      return;
+    }
+    this.state.maxScanRange = range;
     this.state.server = new Horizon.Server(url);
-    this.logger.log(
-      `Horizon server initialized (maxScanRange=${this.state.maxScanRange})`,
-    );
+    this.logger.log(`Horizon server initialized (maxScanRange=${range})`);
   }
 
   /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */

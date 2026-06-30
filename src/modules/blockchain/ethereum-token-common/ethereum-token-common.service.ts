@@ -23,7 +23,7 @@ interface EthereumTokenCommonState {
   config: EthereumBasedTokenType;
   /** 기반 EVM 자산 서비스(노드 web3 재사용). 없으면 스캔 skip. */
   baseAssetService?: EthereumCommonService;
-  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회(필수, 누락 시 throw). */
+  /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxScanRange?: number;
 }
 
@@ -57,11 +57,19 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     }
   }
 
-  /** 기반 노드(web3)가 있으면 scan range 를 ParamStore(토큰 자체 path)로 조회(필수, 누락 시 throw). */
+  /** 기반 노드(web3)가 있을 때 scan range 를 ParamStore(토큰 자체 path)로 조회. 없으면 log+skip. */
   async onModuleInit(): Promise<void> {
-    if (this.state.baseAssetService?.getWeb3()) {
-      this.state.maxScanRange = await getMaxScanRange(this.state.config.path);
+    if (!this.state.baseAssetService?.getWeb3()) {
+      return;
     }
+    const range = await getMaxScanRange(this.state.config.path);
+    if (range === undefined) {
+      this.logger.log(
+        `no maxScanRange for "${this.state.config.path}" — scan skipped`,
+      );
+      return;
+    }
+    this.state.maxScanRange = range;
   }
 
   getTokenTypeId(): number {
@@ -80,9 +88,9 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    const { baseAssetService } = this.state;
+    const { baseAssetService, maxScanRange } = this.state;
     const web3 = baseAssetService?.getWeb3();
-    if (!web3) {
+    if (!web3 || maxScanRange === undefined) {
       warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
@@ -92,7 +100,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.state.maxScanRange! - 1, head);
+    const to = Math.min(from + maxScanRange - 1, head);
 
     const topics = addresses.map(toTopic);
     const txs: DetectedTx[] = [];

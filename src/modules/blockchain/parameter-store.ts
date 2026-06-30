@@ -42,16 +42,13 @@ export async function getNodeUrlByPath(
 
 /**
  * 1회 스캔 범위(블록수/page limit) = `getParametersByPath(path).maxScanRange`.
- * **필수값** — 미설정/0이하면 throw (기본값으로 조용히 진행하지 않는다).
- * 노드 핸들 초기화(onModuleInit) 시점에 함께 조회하므로 누락되면 그 자산은 초기화 실패.
+ * 미설정/0이하면 **undefined** 반환(throw 안 함). 호출부(onModuleInit)는 undefined 면
+ * 노드 미설정과 동일하게 **log 후 skip** — 앱 부팅은 계속, 해당 자산 루프만 조용히 skip.
  */
-export async function getMaxScanRange(path: string): Promise<number> {
+export async function getMaxScanRange(
+  path: string,
+): Promise<number | undefined> {
   const raw = (await getParametersByPath(path)).maxScanRange;
   const n = raw !== undefined ? parseInt(raw, 10) : NaN;
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(
-      `parameter.json path "${path}" 에 maxScanRange 가 없습니다(양수 필수).`,
-    );
-  }
-  return n;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }

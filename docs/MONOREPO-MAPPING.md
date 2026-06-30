@@ -15,7 +15,7 @@
 |------|-----------|----------|----------|
 | 파라미터 조회 | `parameter-store.getParametersByPath(path)` (path별 객체) | `paramStoreService.getParametersByPath(path)` | ✅ 모델 일치 |
 | 노드 URL 필드 | `getNodeUrlByPath(path)` → path 객체의 **`nodeUrl`** | path 객체의 자산별 필드(**`host`/`gethUrl` 등 자산마다 다름**) | ✅ **약속**: 의미는 동일(node RPC 주소). prototype 은 `nodeUrl` 로 통일, monorepo 는 자산별 필드 — 같은 것으로 취급 |
-| 1회 스캔 범위 | `getMaxScanRange(path)` (= `getParametersByPath(path).maxScanRange`, 필수·throw) | `getParametersByPath(path).maxScanRange` → `parseInt`, undefined면 throw | ✅ 일치. (legacy `scanBlocks` 의 `maxBlockScanSize` 는 별개 상수) |
+| 1회 스캔 범위 | `getMaxScanRange(path)` → 미설정이면 **undefined → log 후 skip** | `getParametersByPath(path).maxScanRange` → 미설정이면 **log 후 return(skip)** | ✅ 일치(둘 다 throw 안 함, 노드 미설정과 동일 취급, 앱 부팅 계속). (legacy `maxBlockScanSize` 는 별개 상수) |
 | 자산 식별 | `constants.AssetId.X` (값 임의) | `@gopax/proto` `IsoAlpha3ToAssetId.ISO_ALPHA3_X` | 심볼 정합만(값 무관) |
 | 토큰타입 식별 | `constants.TokenTypeId.X` (값 임의) | `@gopax/proto` `TokenTypeId` (KIP7=11,KONETTOKEN=20,BASETOKEN=21,SPL=9,TRC20=17) | 심볼 정합만 |
 | 토큰 저장 assetId | `detected-tx.mapper` `STUB_TOKEN_ASSET_ID`(1001+, tokenTypeId 기준) | **토큰 자체 assetId**(`main.asset` 행). `main.token(token_type_id, token_contract_address)` 로 contractAddress→assetId 해석 | ⚠️ **양쪽 다 미정렬**: monorepo mapper 도 현재 기반 체인 assetId 넣음. 목표=토큰 자체 assetId |
@@ -71,7 +71,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 ## 5. 정렬 상태
 **prototype 반영 완료 (2026-06-29):**
 1. ✅ **ParamStore 모델**: `getParametersByPath(path)` + path별 `{ nodeUrl, maxScanRange }` 로 전환. 헬퍼 `getNodeUrlByPath`/`getMaxScanRange(path)`.
-2. ✅ **scan range**: `maxScanRange` (path별, 필수·없으면 throw).
+2. ✅ **scan range**: `maxScanRange` (path별). 미설정이면 **log 후 skip**(throw 안 함, 부팅 계속 — 노드 미설정과 동일). 양쪽 동일.
 3. ✅ **진행 지점 테이블**: `wallet_scanner_asset.start_block_number` 로 맞춤(`WalletScannerAssetRepository`). main.asset 와 분리.
 6. ✅ **자산 로스터**: monorepo 기준 일치 — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken, sol/spl/xlm/btc/bch/trx/trc20/xrp/xpla. (ETH/POL/erc20 제거)
 
