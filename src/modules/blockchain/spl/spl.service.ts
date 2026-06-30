@@ -4,7 +4,7 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
+import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
 
 const SOL_PATH = 'sol'; // SOL 노드 공유, scan range 도 sol path
 
@@ -18,7 +18,7 @@ interface SplState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   connection?: Connection;
   /** page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  maxScanRange?: number;
+  maxDepositScanRange?: number;
 }
 
 /**
@@ -45,14 +45,16 @@ export class SplService implements TokenService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    const range = await getMaxScanRange(SOL_PATH);
+    const range = await getMaxDepositScanRange(SOL_PATH);
     if (range === undefined) {
-      this.logger.log(`no maxScanRange for "${SOL_PATH}" — scan skipped`);
+      this.logger.log(
+        `no maxDepositScanRange for "${SOL_PATH}" — scan skipped`,
+      );
       return;
     }
-    this.state.maxScanRange = range;
+    this.state.maxDepositScanRange = range;
     this.state.connection = new Connection(url, 'confirmed');
-    this.logger.log(`connection initialized (maxScanRange=${range})`);
+    this.logger.log(`connection initialized (maxDepositScanRange=${range})`);
   }
 
   /** 노드 URL 조회. ParamStore path 기준 async 조회(SOL 노드 공유). */
@@ -70,7 +72,7 @@ export class SplService implements TokenService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
-    const limit = this.state.maxScanRange!;
+    const limit = this.state.maxDepositScanRange!;
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 

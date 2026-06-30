@@ -3,7 +3,7 @@ import Web3 from 'web3';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
+import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
@@ -15,7 +15,7 @@ interface EthereumCommonState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   web3?: Web3;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  maxScanRange?: number;
+  maxDepositScanRange?: number;
 }
 
 /**
@@ -45,18 +45,18 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip (range 도 불필요)
     }
-    // maxScanRange 미설정 → 노드 미설정과 동일하게 log 후 skip (throw 안 함, 부팅은 계속)
-    const range = await getMaxScanRange(this.state.config.path);
+    // maxDepositScanRange 미설정 → 노드 미설정과 동일하게 log 후 skip (throw 안 함, 부팅은 계속)
+    const range = await getMaxDepositScanRange(this.state.config.path);
     if (range === undefined) {
       this.logger.log(
-        `no maxScanRange for "${this.state.config.path}" — scan skipped`,
+        `no maxDepositScanRange for "${this.state.config.path}" — scan skipped`,
       );
       return;
     }
-    this.state.maxScanRange = range;
+    this.state.maxDepositScanRange = range;
     this.state.web3 = new Web3(url);
     this.logger.log(
-      `web3 initialized @ ${this.networkName} (maxScanRange=${range})`,
+      `web3 initialized @ ${this.networkName} (maxDepositScanRange=${range})`,
     );
   }
 
@@ -98,7 +98,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.state.maxScanRange! - 1, head);
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
 
     const watch = new Set(addresses.map((a) => a.toLowerCase()));
     const txs: DetectedTx[] = [];

@@ -3,7 +3,7 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
+import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
 import { XrpRpcClient } from './xrp-rpc.client';
 
 const XRP_PATH = 'xrp';
@@ -13,7 +13,7 @@ interface XrpState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   client?: XrpRpcClient;
   /** account_tx page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  maxScanRange?: number;
+  maxDepositScanRange?: number;
 }
 
 /**
@@ -39,14 +39,18 @@ export class XrpService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    const range = await getMaxScanRange(XRP_PATH);
+    const range = await getMaxDepositScanRange(XRP_PATH);
     if (range === undefined) {
-      this.logger.log(`no maxScanRange for "${XRP_PATH}" — scan skipped`);
+      this.logger.log(
+        `no maxDepositScanRange for "${XRP_PATH}" — scan skipped`,
+      );
       return;
     }
-    this.state.maxScanRange = range;
+    this.state.maxDepositScanRange = range;
     this.state.client = new XrpRpcClient(url);
-    this.logger.log(`rippled client initialized (maxScanRange=${range})`);
+    this.logger.log(
+      `rippled client initialized (maxDepositScanRange=${range})`,
+    );
   }
 
   /** 노드 URL 조회. ParamStore path 기준 async 조회(추후 DB/원격 설정 교체 가능). */
@@ -69,7 +73,7 @@ export class XrpService implements AssetService, OnModuleInit {
     const from = cursor === null ? head : Number(cursor) + 1;
     let maxLedger = cursor === null ? head : Number(cursor);
 
-    const limit = this.state.maxScanRange!;
+    const limit = this.state.maxDepositScanRange!;
     const txs: DetectedTx[] = [];
     for (const address of addresses) {
       const entries = await client.accountTx(address, from, limit);

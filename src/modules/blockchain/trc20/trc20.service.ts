@@ -3,7 +3,7 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange } from '../parameter-store';
+import { getMaxDepositScanRange } from '../parameter-store';
 import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
@@ -26,7 +26,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
   readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('Trc20Service');
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  private maxScanRange?: number;
+  private maxDepositScanRange?: number;
 
   constructor(private readonly trx: TrxService) {}
 
@@ -35,12 +35,14 @@ export class Trc20Service implements TokenService, OnModuleInit {
     if (!this.trx.getTronWeb()) {
       return;
     }
-    const range = await getMaxScanRange(TRC20_PATH);
+    const range = await getMaxDepositScanRange(TRC20_PATH);
     if (range === undefined) {
-      this.logger.log(`no maxScanRange for "${TRC20_PATH}" — scan skipped`);
+      this.logger.log(
+        `no maxDepositScanRange for "${TRC20_PATH}" — scan skipped`,
+      );
       return;
     }
-    this.maxScanRange = range;
+    this.maxDepositScanRange = range;
   }
 
   getTokenTypeId(): number {
@@ -52,7 +54,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
     cursor: string | null,
   ): Promise<ScanResult> {
     const tronWeb = this.trx.getTronWeb();
-    if (!tronWeb || this.maxScanRange === undefined) {
+    if (!tronWeb || this.maxDepositScanRange === undefined) {
       warnMissingNode(this.logger, TRC20_PATH);
       return { txs: [], nextCursor: cursor };
     }
@@ -62,7 +64,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.maxScanRange - 1, head);
+    const to = Math.min(from + this.maxDepositScanRange - 1, head);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];

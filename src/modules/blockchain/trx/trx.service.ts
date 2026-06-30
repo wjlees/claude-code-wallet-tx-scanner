@@ -4,7 +4,7 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange, getNodeUrlByPath } from '../parameter-store';
+import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
 
 const TRON_PATH = 'tron'; // path 는 tron (symbol 은 trx)
 
@@ -13,7 +13,7 @@ interface TrxState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   tronWeb?: TronWeb;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  maxScanRange?: number;
+  maxDepositScanRange?: number;
 }
 
 /**
@@ -41,14 +41,16 @@ export class TrxService implements AssetService, OnModuleInit {
     if (!url) {
       return; // 노드 미설정 → 스캔 skip
     }
-    const range = await getMaxScanRange(TRON_PATH);
+    const range = await getMaxDepositScanRange(TRON_PATH);
     if (range === undefined) {
-      this.logger.log(`no maxScanRange for "${TRON_PATH}" — scan skipped`);
+      this.logger.log(
+        `no maxDepositScanRange for "${TRON_PATH}" — scan skipped`,
+      );
       return;
     }
-    this.state.maxScanRange = range;
+    this.state.maxDepositScanRange = range;
     this.state.tronWeb = new TronWeb({ fullHost: url });
-    this.logger.log(`tronWeb initialized (maxScanRange=${range})`);
+    this.logger.log(`tronWeb initialized (maxDepositScanRange=${range})`);
   }
 
   /** 노드 URL 조회. ParamStore path(tron) 기준 async 조회. */
@@ -76,7 +78,7 @@ export class TrxService implements AssetService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + this.state.maxScanRange! - 1, head);
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];

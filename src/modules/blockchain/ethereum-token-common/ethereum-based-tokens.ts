@@ -20,7 +20,7 @@ export interface EthereumBasedTokenType extends EthereumBasedAssetType {
 /**
  * EVM 계열 토큰 레지스트리. (키 = `TokenTypeId` 의 EVM 부분집합)
  * monorepo tx-scanner EVM 토큰: kip7(KLAY) / konetToken(KONET) / baseToken(BASE).
- * NOTE: 노드는 기반 자산(base) web3 를 재사용하되, `path` 는 토큰 자체 path(maxScanRange 조회용)로 덮어쓴다.
+ * NOTE: 노드는 기반 자산(base) web3 를 재사용하되, `path` 는 토큰 자체 path(maxDepositScanRange 조회용)로 덮어쓴다.
  */
 export const ethereumBasedTokens: Record<number, EthereumBasedTokenType> = {
   [TokenTypeId.KIP7]: {

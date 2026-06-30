@@ -10,7 +10,7 @@ import { AssetId } from '../constants';
 export interface EthereumBasedAssetType {
   /** 네트워크 식별 이름 (로깅용) */
   networkName: string;
-  /** ParamStore path (= monorepo getParametersByPath path). 노드URL·maxScanRange 조회 키. */
+  /** ParamStore path (= monorepo getParametersByPath path). 노드URL·maxDepositScanRange 조회 키. */
   path: string;
   /** EIP-1559(base fee) 지원 여부 */
   EIP1559: boolean;

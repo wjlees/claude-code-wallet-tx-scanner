@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { ScanResult } from '../interfaces/scan.types';
-import { getMaxScanRange } from '../parameter-store';
+import { getMaxDepositScanRange } from '../parameter-store';
 import {
   UtxoAssetConfig,
   UtxoCommonService,
@@ -19,8 +19,8 @@ export class BtcService implements AssetService, OnModuleInit {
   private readonly cfg: UtxoAssetConfig = { symbol: 'btc', path: 'btc' };
   readonly scanIntervalMs = 5000;
   private readonly logger = new Logger('BtcService');
-  /** 1회 스캔 블록 수. 노드+maxScanRange 둘 다 있어야 스캔. 없으면 skip. */
-  private maxScanRange?: number;
+  /** 1회 스캔 블록 수. 노드+maxDepositScanRange 둘 다 있어야 스캔. 없으면 skip. */
+  private maxDepositScanRange?: number;
 
   constructor(private readonly utxo: UtxoCommonService) {}
 
@@ -29,12 +29,14 @@ export class BtcService implements AssetService, OnModuleInit {
     if (!(await this.utxo.hasNode(this.cfg))) {
       return;
     }
-    const range = await getMaxScanRange(this.cfg.path);
+    const range = await getMaxDepositScanRange(this.cfg.path);
     if (range === undefined) {
-      this.logger.log(`no maxScanRange for "${this.cfg.path}" — scan skipped`);
+      this.logger.log(
+        `no maxDepositScanRange for "${this.cfg.path}" — scan skipped`,
+      );
       return;
     }
-    this.maxScanRange = range;
+    this.maxDepositScanRange = range;
   }
 
   getAssetId(): number {
@@ -49,14 +51,14 @@ export class BtcService implements AssetService, OnModuleInit {
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    if (this.maxScanRange === undefined) {
+    if (this.maxDepositScanRange === undefined) {
       return Promise.resolve({ txs: [], nextCursor: cursor });
     }
     return this.utxo.scanTransactions(
       this.cfg,
       addresses,
       cursor,
-      this.maxScanRange,
+      this.maxDepositScanRange,
     );
   }
 

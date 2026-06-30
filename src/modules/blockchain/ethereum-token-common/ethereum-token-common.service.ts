@@ -3,7 +3,7 @@ import { EthereumCommonService } from '../ethereum-common/ethereum-common.servic
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxScanRange } from '../parameter-store';
+import { getMaxDepositScanRange } from '../parameter-store';
 import {
   EthereumBasedTokenType,
   ethereumBasedTokens,
@@ -24,7 +24,7 @@ interface EthereumTokenCommonState {
   /** 기반 EVM 자산 서비스(노드 web3 재사용). 없으면 스캔 skip. */
   baseAssetService?: EthereumCommonService;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
-  maxScanRange?: number;
+  maxDepositScanRange?: number;
 }
 
 /**
@@ -62,14 +62,14 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     if (!this.state.baseAssetService?.getWeb3()) {
       return;
     }
-    const range = await getMaxScanRange(this.state.config.path);
+    const range = await getMaxDepositScanRange(this.state.config.path);
     if (range === undefined) {
       this.logger.log(
-        `no maxScanRange for "${this.state.config.path}" — scan skipped`,
+        `no maxDepositScanRange for "${this.state.config.path}" — scan skipped`,
       );
       return;
     }
-    this.state.maxScanRange = range;
+    this.state.maxDepositScanRange = range;
   }
 
   getTokenTypeId(): number {
@@ -88,9 +88,9 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    const { baseAssetService, maxScanRange } = this.state;
+    const { baseAssetService, maxDepositScanRange } = this.state;
     const web3 = baseAssetService?.getWeb3();
-    if (!web3 || maxScanRange === undefined) {
+    if (!web3 || maxDepositScanRange === undefined) {
       warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
@@ -100,7 +100,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + maxScanRange - 1, head);
+    const to = Math.min(from + maxDepositScanRange - 1, head);
 
     const topics = addresses.map(toTopic);
 

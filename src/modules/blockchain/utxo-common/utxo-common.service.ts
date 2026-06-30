@@ -8,7 +8,7 @@ import { UtxoRpcClient } from './utxo-rpc.client';
 export interface UtxoAssetConfig {
   /** 체인 심볼 (로그/식별용) */
   symbol: string;
-  /** ParamStore path (노드URL·maxScanRange 조회, 예: 'btc' / 'bch') */
+  /** ParamStore path (노드URL·maxDepositScanRange 조회, 예: 'btc' / 'bch') */
   path: string;
 }
 
@@ -45,14 +45,14 @@ export class UtxoCommonService {
   }
 
   /**
-   * cursor=마지막 스캔 블록 높이. 다음 블록부터 head 까지(maxScanRange 제한) vout 수신 매칭.
-   * maxScanRange 는 btc/bch 가 onModuleInit 에서 조회해 넘긴다.
+   * cursor=마지막 스캔 블록 높이. 다음 블록부터 head 까지(maxDepositScanRange 제한) vout 수신 매칭.
+   * maxDepositScanRange 는 btc/bch 가 onModuleInit 에서 조회해 넘긴다.
    */
   async scanTransactions(
     cfg: UtxoAssetConfig,
     addresses: string[],
     cursor: string | null,
-    maxScanRange: number,
+    maxDepositScanRange: number,
   ): Promise<ScanResult> {
     const client = await this.client(cfg);
     if (!client) {
@@ -63,7 +63,7 @@ export class UtxoCommonService {
     if (from > head) {
       return { txs: [], nextCursor: String(head) };
     }
-    const to = Math.min(from + maxScanRange - 1, head);
+    const to = Math.min(from + maxDepositScanRange - 1, head);
     const txs = await client.scanRange(from, to, addresses);
     this.logger.log(
       `[${cfg.symbol}] scanned blocks ${from}~${to} (UTXO) → ${txs.length} tx`,
