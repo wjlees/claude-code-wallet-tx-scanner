@@ -15,7 +15,7 @@
 |------|-----------|----------|----------|
 | 파라미터 조회 | `parameter-store.getParametersByPath(path)` (path별 객체) | `paramStoreService.getParametersByPath(path)` | ✅ 모델 일치 |
 | 노드 URL 필드 | `getNodeUrlByPath(path)` → path 객체의 **`nodeUrl`** | path 객체의 자산별 필드(**`host`/`gethUrl` 등 자산마다 다름**) | ✅ **약속**: 의미는 동일(node RPC 주소). prototype 은 `nodeUrl` 로 통일, monorepo 는 자산별 필드 — 같은 것으로 취급 |
-| 1회 스캔 범위 | `getMaxDepositScanRange(path)` → 미설정이면 **undefined → log 후 skip** | ParamStore 저장 키는 **`maxDepositScanRange`** 인데 코드는 **`maxScanRange`** 로 읽고 있었음(키 불일치 → 항상 미설정 취급, 동작 안 함) | ⚠️ **양쪽 동일 버그였음 → 양쪽 모두 `maxDepositScanRange` 로 통일 수정.** monorepo 도 코드의 `maxScanRange` 읽기를 `maxDepositScanRange` 로 변경 필요. (정책은 일치: 미설정이면 throw 안 하고 log 후 skip.) (legacy `maxBlockScanSize` 는 별개 상수) |
+| 1회 스캔 범위 | `getMaxDepositScanRange(path)` → 미설정이면 **undefined → log 후 skip** | `getParametersByPath(path).maxDepositScanRange` → 미설정이면 **log 후 return(skip)** | ✅ 일치(양쪽 `maxDepositScanRange` 로 통일 — 과거 양쪽 `maxScanRange` 로 읽던 키 불일치 버그 수정 완료, §5-9). (legacy `maxBlockScanSize` 는 별개 상수) |
 | 자산 식별 | `constants.AssetId.X` (값 임의) | `@gopax/proto` `IsoAlpha3ToAssetId.ISO_ALPHA3_X` | 심볼 정합만(값 무관) |
 | 토큰타입 식별 | `constants.TokenTypeId.X` (값 임의) | `@gopax/proto` `TokenTypeId` (KIP7=11,KONETTOKEN=20,BASETOKEN=21,SPL=9,TRC20=17) | 심볼 정합만 |
 | 저장 assetId 해석 | `tx-scanner.service` `resolveStoreAssetId(target)` **stub**(토큰=1001+) | `assetRepository`/`tokenRepository` 로 실제 assetId 조회 | ⚠️ prototype 은 stub, monorepo 는 repo 조회. 토큰 자체 assetId 목표는 §5-6(양쪽 미정렬) |
@@ -78,13 +78,15 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 4. **자산 로스터** — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken + sol/spl/xlm/btc/bch/trx/trc20/xpla. (ETH/POL/erc20 제거. **xrp 예외 — 아래 주의 참조**)
 5. **스캔 계약/진입점** — 스캔 계약을 `AssetService`/`TokenService` 에 통합(별도 `Scannable*`/가드 제거), `BlockchainService` 단일 진입점. legacy 출금 전용 모듈 정리.
 8. **DetectedTx in/out 제거** — `DetectedTx` 가 `fromAddress`/`toAddress` 만(direction/address/counterparty 제거). 매퍼·`TxRepository` 제거하고 `saveDetected` 가 직접 저장(DetectedTx≈DB 컬럼). 워치독 `@Cron`→`setInterval`(monorepo=scheduler_manager). run 주기 10s 통일.
+9. **scan range 필드명** — ParamStore 저장 키는 `maxDepositScanRange` 인데 양쪽 코드가 `maxScanRange` 로 읽어 항상 미설정 취급(동작 안 함)이던 버그. **양쪽 수정 완료**(prototype 2026-06-30 커밋, monorepo `getParametersByPath(path).maxDepositScanRange` 로 변경). 정책 그대로(미설정이면 throw 안 하고 log 후 skip).
 
 **⏳ 아직 양쪽 미정렬 (다음 sync 작업):**
-6. **토큰 detected_transactions.assetId** — 목표=토큰 자체 assetId(`main.token` 의 contractAddress→assetId per-tx). 현재 양쪽 모두 토큰타입 단위(기반 체인 id / stub). prototype `resolveStoreAssetId` 는 stub 1001+ (monorepo 는 assetRepository/tokenRepository 로 조회 예정). TRC20 등은 `raw.contract` 에 contractAddress 보관 중.
+6. **토큰 detected_transactions.assetId** — 목표=토큰 자체 assetId(`main.token` 의 contractAddress→assetId **per-tx**). 현재 양쪽 모두 토큰타입 단위(기반 체인 id / stub). prototype `resolveStoreAssetId` 는 stub 1001+ (monorepo 는 assetRepository/tokenRepository 로 조회 예정). TRC20 등은 `raw.contract` 에 contractAddress 보관 중. (§10 과 같은 `resolveStoreAssetId` 뿌리지만 이쪽은 per-tx 컨트랙트 해석이라 별개.)
 7. **detected_transactions 멱등** — 양쪽 미구현. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후.
-9. **scan range 필드명** — ParamStore 저장 키는 `maxDepositScanRange` 인데 **양쪽 코드가 `maxScanRange` 로 읽고 있어** 항상 미설정 취급(동작 안 함)이던 버그. **prototype 은 수정 완료**(2026-06-30, 커밋). **monorepo 는 코드의 `maxScanRange` 읽기를 `maxDepositScanRange` 로 변경 필요** — `getParametersByPath(path).maxDepositScanRange` 로 접근하도록 호출부 수정(정책은 그대로: 미설정이면 throw 안 하고 log 후 skip).
+10. **토큰 진행지점(`wallet_scanner_asset`) 행 키 충돌** — `resolveStoreAssetId` 가 **monorepo 에서 토큰을 기반 체인 assetId 로 반환** → KONET 토큰 진행지점이 **KONET 자산 행을 덮어씀**(둘이 같은 `asset_id` 행 공유). **prototype 은 stub(토큰타입별 1001+)으로 행이 분리돼 충돌 없음 → prototype 변경 불필요. monorepo 만 수정 필요**: 토큰 진행지점 행 키를 기반 체인 id 가 아니라 **토큰타입별로 구분되는 키**로. ⚠️ 단, `wallet_scanner_asset` 키는 `asset_id` 단독(§3)이라 토큰이 독립 행을 가지려면 (a) 토큰이 자체 assetId 를 갖거나 (b) 테이블에 token_type 구분 컬럼이 필요 — **양쪽 합의 필요**(konetToken 이 단일 자산인지, 여러 컨트랙트를 덮는 토큰타입인지에 따라 갈림). 진행지점은 per-ScanRunner(토큰타입 1개) 단위라 §6 의 per-tx 해석보다 단순.
 
 **주의/약속:**
+- **DB 트랜잭션 래핑(monorepo 전용)**: monorepo 는 `saveDetected`/`updateStartBlockNumber` 의 DB 쓰기를 `@InjectTransactionRunner(DATASOURCE_WALLET_SHORT_IDLE)` 의 `walletTransactionRunner.runInTransaction(...)` 으로 감싼다. prototype 은 stub repository(실 DB 없음)라 트랜잭션 래핑 없음 — **의도된 발산**(prototype 에 옮기지 않음).
 - **xrp**: prototype 로스터엔 있으나 monorepo `BlockchainService` **미등록**(추후 추가 예정) — 현재 유일한 로스터 차이.
 - **nodeUrl**: prototype `nodeUrl` ≡ monorepo path 객체의 자산별 URL 필드(`host`/`gethUrl` 등) — 같은 의미(node RPC 주소)로 취급(§1).
 - **숫자값**: `AssetId`/`TokenTypeId` 값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).
