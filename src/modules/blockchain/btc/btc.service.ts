@@ -17,7 +17,7 @@ import {
 @Injectable()
 export class BtcService implements AssetService, OnModuleInit {
   private readonly cfg: UtxoAssetConfig = { symbol: 'btc', path: 'btc' };
-  readonly scanIntervalMs = 5000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('BtcService');
   /** 1회 스캔 블록 수. 노드+maxDepositScanRange 둘 다 있어야 스캔. 없으면 skip. */
   private maxDepositScanRange?: number;

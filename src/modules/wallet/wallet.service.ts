@@ -44,10 +44,10 @@ export class WalletService {
   }
 
   /**
-   * `ScanTarget` 을 assetId 목록으로 해석한다.
-   * - assetId: 그대로 포함
-   * - tokenTypeId: 그 토큰이 올라간 기반 assetId 들을 조회해 포함
-   * - 둘 다: 합집합 (한 번에 자산+토큰을 함께 스캔하는 통합 대상)
+   * `ScanTarget` 을 **주소 조회용** assetId 목록으로 해석한다.
+   * - 코인(`assetId`): 그대로 포함.
+   * - 토큰(`tokenTypeId`): 그 토큰이 올라간 **기반 체인** assetId 들을 포함(주소는 기반 체인 지갑 주소).
+   *   토큰의 `tokenAssetId`(토큰 자체 id)는 저장 키일 뿐 지갑 주소 키가 아니므로 여기서 쓰지 않는다.
    */
   private async resolveAssetIds(target: ScanTarget): Promise<number[]> {
     const ids = new Set<number>();

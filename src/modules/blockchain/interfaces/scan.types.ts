@@ -1,13 +1,16 @@
 /**
- * 스캔 대상 식별 (자산/토큰). 심볼 문자열이 아니라 **숫자 id** 가 기준이다.
- * assetId / tokenTypeId 중 **최소 하나**는 있어야 한다.
- * - assetId 만: 네이티브 자산 스캔
- * - tokenTypeId 만: 토큰 스캔
- * - 둘 다: 한 번의 스캔으로 자산+토큰을 함께 감지하는 통합 대상(예: SOL ownerAddress +
- *   SPL ATA 를 동시에). 현재는 단일 식별만 사용하고, 통합은 추후 지원 여지를 위해 열어둠.
+ * 스캔 대상 식별 (코인/토큰). 심볼 문자열이 아니라 **숫자 id** 가 기준이다.
+ * `assetId`(코인) / `tokenTypeId`(토큰) 중 **최소 하나**는 있어야 한다.
+ *
+ * - **코인(네이티브 자산)**: `{ assetId }`. AssetService 선택·주소 조회·저장 키가 모두 이 id.
+ * - **토큰**: `{ tokenTypeId }`. 한 TokenService(=token_type)가 **여러 토큰을 한 루프로** 스캔한다.
+ *   어느 토큰(asset_id)인지는 스캔 결과 tx 의 `contractAddress` 로 분류한다(저장 단계).
+ *   토큰 목록(asset_id+contractAddress)은 tx-scanner 가 `main.token` 에서 token_type 으로 조회.
  */
 export interface ScanTarget {
+  /** 코인(네이티브 자산) id. 코인일 때만. */
   assetId?: number;
+  /** 토큰 타입 id. 토큰일 때만 (TokenService 선택 + 기반 체인 주소 조회). */
   tokenTypeId?: number;
 }
 
@@ -25,6 +28,8 @@ export interface DetectedTx {
   fromAddress?: string;
   /** 받는 주소 (파싱 가능 시) */
   toAddress?: string;
+  /** 토큰 컨트랙트/mint 주소 (토큰 transfer 일 때). 저장 시 contractAddress→asset_id 분류에 사용. */
+  contractAddress?: string;
   /** 금액 (문자열, 최소단위) */
   amount?: string;
   /** 입금 식별용 memoId/DestinationTag 등 */

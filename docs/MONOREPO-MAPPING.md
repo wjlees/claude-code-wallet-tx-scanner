@@ -18,11 +18,11 @@
 | 1회 스캔 범위 | `getMaxDepositScanRange(path)` → 미설정이면 **undefined → log 후 skip** | `getParametersByPath(path).maxDepositScanRange` → 미설정이면 **log 후 return(skip)** | ✅ 일치(양쪽 `maxDepositScanRange` 로 통일 — 과거 양쪽 `maxScanRange` 로 읽던 키 불일치 버그 수정 완료, §5-9). (legacy `maxBlockScanSize` 는 별개 상수) |
 | 자산 식별 | `constants.AssetId.X` (값 임의) | `@gopax/proto` `IsoAlpha3ToAssetId.ISO_ALPHA3_X` | 심볼 정합만(값 무관) |
 | 토큰타입 식별 | `constants.TokenTypeId.X` (값 임의) | `@gopax/proto` `TokenTypeId` (KIP7=11,KONETTOKEN=20,BASETOKEN=21,SPL=9,TRC20=17) | 심볼 정합만 |
-| 저장 assetId 해석 | `tx-scanner.service` `resolveStoreAssetId(target)` **stub**(토큰=1001+) | `assetRepository`/`tokenRepository` 로 실제 assetId 조회 | ⚠️ prototype 은 stub, monorepo 는 repo 조회. 토큰 자체 assetId 목표는 §5-6(양쪽 미정렬) |
+| 저장 assetId 해석 | 코인=`assetId`. 토큰=token_type 루프가 tx 의 `contractAddress→asset_id`(main.token) 로 분류해 각 토큰 asset_id 로 저장(`saveDetectedTokens`). 토큰 목록은 `TokenRepository`(main.token stub)에서 `token_type → [{assetId, contractAddress}]` | `assetRepository`/`tokenRepository`(main.token) 로 `token_type_id → (asset_id, contractAddress)` 조회 후 tx 의 contractAddress 로 분류 | ✅ 모델 일치(토큰이 자기 asset id, per-tx contractAddress 분류). prototype 은 토큰 목록 stub, monorepo 는 실제 main.token. §5-6/§5-10 참조 |
 | DetectedTx | `{ txHash, fromAddress?, toAddress?, amount?, memoId?, blockNumber?, raw }` — **in/out 의미부여 안 함**(from/to 만) | 동일 컨셉 | ✅ 일치. in/out 해석은 저장/조회 단계 |
 | tx 저장 | `TxScannerService.saveDetected` → `DetectedTransactionsRepository.insertDetectedTransactions`(stub). **매퍼/TxRepository 없음**(DetectedTx≈DB 컬럼이라 직접 매핑) | 동명 repository (`main.detected_transactions`) | ✅ InsertParams(fromAddress/toAddress/txId/amount/note…) 정렬 |
 | 워치독 | `TxScannerService.watchdog()` — **`@Cron` 아님**, `setInterval` 로 주기 호출 | `scheduler_manager` 가 watchdog 등록·주기 호출(@Cron 아님) | ✅ 둘 다 @Cron 미사용 |
-| 진행 지점 | `WalletScannerAssetRepository` = `wallet_scanner_asset.start_block_number`(stub) | `wallet.wallet_scanner_asset.start_block_number` (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ✅ 일치. **키 = `asset_id` 단독**(중복 없음), 현재 `start_block_number` 만(컬럼 필요 시 추가) |
+| 진행 지점 | `WalletScannerAssetRepository` = `wallet_scanner_asset.start_block_number`(stub) | `wallet.wallet_scanner_asset.start_block_number` (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ✅ 일치. **PK = `id` 단독**(코인=main.asset.id / 토큰=token 자체 asset_id, 한 id 공간·중복 없음), 현재 `start_block_number` 만(컬럼 필요 시 추가) |
 | cursor(체인경계) | `ScanResult.nextCursor` (불투명) | 동일 | DB엔 start_block_number 로 저장 |
 | 스캔 계약 | `AssetService`/`TokenService` (스캔 계약 직접 포함) | `AssetService`/`TokenService` + `BlockchainService` (Scannable 제거 완료) | ✅ **일치**. monorepo 인터페이스는 출금/입금(scanBlocks 등) 메서드까지 포함해 prototype 보다 넓음(상위집합) |
 | 진입점 | `BlockchainService` | `BlockchainService` (`ScannableBlockchainService` 삭제됨) | ✅ 일치 |
@@ -74,16 +74,22 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 
 **✅ 완료 (양쪽 일치, monorepo 확인됨):**
 1. **ParamStore 모델** — `getParametersByPath(path)` + path별 `{ nodeUrl, maxDepositScanRange }`. 헬퍼 `getNodeUrlByPath`/`getMaxDepositScanRange(path)`.
-3. **진행 지점 테이블** — `wallet_scanner_asset.start_block_number`(`WalletScannerAssetRepository`, main.asset 분리). 키=`asset_id` 단독.
+3. **진행 지점 테이블** — `wallet_scanner_asset.start_block_number`(`WalletScannerAssetRepository`, main.asset 분리). **PK=`id` 단독**(코인=main.asset.id / 토큰=token 자체 asset_id, 한 id 공간 공유).
 4. **자산 로스터** — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken + sol/spl/xlm/btc/bch/trx/trc20/xpla. (ETH/POL/erc20 제거. **xrp 예외 — 아래 주의 참조**)
 5. **스캔 계약/진입점** — 스캔 계약을 `AssetService`/`TokenService` 에 통합(별도 `Scannable*`/가드 제거), `BlockchainService` 단일 진입점. legacy 출금 전용 모듈 정리.
 8. **DetectedTx in/out 제거** — `DetectedTx` 가 `fromAddress`/`toAddress` 만(direction/address/counterparty 제거). 매퍼·`TxRepository` 제거하고 `saveDetected` 가 직접 저장(DetectedTx≈DB 컬럼). 워치독 `@Cron`→`setInterval`(monorepo=scheduler_manager). run 주기 10s 통일.
 9. **scan range 필드명** — ParamStore 저장 키는 `maxDepositScanRange` 인데 양쪽 코드가 `maxScanRange` 로 읽어 항상 미설정 취급(동작 안 함)이던 버그. **양쪽 수정 완료**(prototype 2026-06-30 커밋, monorepo `getParametersByPath(path).maxDepositScanRange` 로 변경). 정책 그대로(미설정이면 throw 안 하고 log 후 skip).
 
+**🔷 토큰 자체 asset id 모델 (prototype 구현 완료, monorepo 적용 필요):**
+
+§6·§10 은 같은 뿌리다 — **토큰은 자기 asset id 를 갖는다**(코인과 한 id 공간 공유, `wallet_scanner_asset.id` 단일 PK). 한 `TokenService`(=token_type)가 여러 토큰을 덮으므로 `main.token` 에서 `token_type_id → [(asset_id, contractAddress)]` 를 받아, **token_type 당 한 루프**로 그 토큰들을 스캔한다. 스캔 결과 tx 를 `contractAddress→asset_id` 로 분류해 각 토큰 asset_id 로 저장하고, 진행지점은 그 타입의 토큰 행들을 **함께 같은 값**으로 갱신한다(같이 도므로). 예: erc20 type 이 AAA(id=3)·CCC(id=5)면 한 루프로 둘 다 감지·분류. KONET 코인(id=2)과 KONET 토큰(id=4)이 다른 id 라 충돌 없음. (토큰 행이 여러 개라 같은 값이 중복 저장되는 게 어색하면 `wallet_scanner_token`(token_type_id 키) 테이블을 둘 수 있으나 **지금은 불필요**.)
+- **prototype 구현 완료**(2026-06-30): `TokenRepository`(main.token stub) + **token_type 당 `ScanRunner` 1개**(contractAddresses 목록 전달) + `TokenService.scanTransactions(.., contractAddresses[])`(각 tx 에 contractAddress 채움) + `saveDetectedTokens`(contractAddress→asset_id 분류 저장) + 진행지점 다중 행 동시 갱신. `STUB_TOKEN_ASSET_ID`·`resolveStoreAssetId` 제거, `DetectedTx.contractAddress` 추가.
+- **monorepo 적용 필요**: 토큰의 진행지점 행 키(§10)·`detected_transactions.assetId`(§6) 를 **기반 체인 id 가 아니라 `main.token.asset_id`** 로. `token_type_id` 로 token 목록을 조회해 한 루프로 스캔하고 tx 의 contractAddress→asset_id 로 분류·저장. (이전에 띄웠던 (a)/(b) 갈림은 **(a)=토큰 자체 asset_id 로 확정**; `wallet_scanner_asset.id` 단일 PK 라 token_type 컬럼 불필요.)
+  - 6. **detected_transactions.assetId** = tx 의 contractAddress→token.asset_id (per-tx 분류).
+  - 10. **wallet_scanner_asset 진행지점 행** = 그 token_type 의 토큰 asset_id 행들을 함께 갱신 (KONET 토큰이 KONET 코인 행을 덮어쓰던 충돌 해소).
+
 **⏳ 아직 양쪽 미정렬 (다음 sync 작업):**
-6. **토큰 detected_transactions.assetId** — 목표=토큰 자체 assetId(`main.token` 의 contractAddress→assetId **per-tx**). 현재 양쪽 모두 토큰타입 단위(기반 체인 id / stub). prototype `resolveStoreAssetId` 는 stub 1001+ (monorepo 는 assetRepository/tokenRepository 로 조회 예정). TRC20 등은 `raw.contract` 에 contractAddress 보관 중. (§10 과 같은 `resolveStoreAssetId` 뿌리지만 이쪽은 per-tx 컨트랙트 해석이라 별개.)
 7. **detected_transactions 멱등** — 양쪽 미구현. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후.
-10. **토큰 진행지점(`wallet_scanner_asset`) 행 키 충돌** — `resolveStoreAssetId` 가 **monorepo 에서 토큰을 기반 체인 assetId 로 반환** → KONET 토큰 진행지점이 **KONET 자산 행을 덮어씀**(둘이 같은 `asset_id` 행 공유). **prototype 은 stub(토큰타입별 1001+)으로 행이 분리돼 충돌 없음 → prototype 변경 불필요. monorepo 만 수정 필요**: 토큰 진행지점 행 키를 기반 체인 id 가 아니라 **토큰타입별로 구분되는 키**로. ⚠️ 단, `wallet_scanner_asset` 키는 `asset_id` 단독(§3)이라 토큰이 독립 행을 가지려면 (a) 토큰이 자체 assetId 를 갖거나 (b) 테이블에 token_type 구분 컬럼이 필요 — **양쪽 합의 필요**(konetToken 이 단일 자산인지, 여러 컨트랙트를 덮는 토큰타입인지에 따라 갈림). 진행지점은 per-ScanRunner(토큰타입 1개) 단위라 §6 의 per-tx 해석보다 단순.
 
 **주의/약속:**
 - **DB 트랜잭션 래핑(monorepo 전용)**: monorepo 는 `saveDetected`/`updateStartBlockNumber` 의 DB 쓰기를 `@InjectTransactionRunner(DATASOURCE_WALLET_SHORT_IDLE)` 의 `walletTransactionRunner.runInTransaction(...)` 으로 감싼다. prototype 은 stub repository(실 DB 없음)라 트랜잭션 래핑 없음 — **의도된 발산**(prototype 에 옮기지 않음).

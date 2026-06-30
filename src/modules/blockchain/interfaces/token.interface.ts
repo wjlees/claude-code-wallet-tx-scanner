@@ -17,10 +17,15 @@ export interface TokenService {
   /**
    * 대상 주소들의 신규 in/out 토큰 트랜잭션을 감지한다.
    * (EVM 토큰 = Transfer 이벤트 로그, SPL = 토큰계정 signature 등 — 자산이 알아서)
+   *
+   * 하나의 TokenService(=token_type)가 **여러 토큰을 한 번에** 스캔한다. `contractAddresses`
+   * 로 이 token_type 에 속한 토큰 컨트랙트 목록을 받아 그 컨트랙트들의 transfer 만 수집하고,
+   * **각 tx 에 `contractAddress` 를 채워** 어느 토큰인지 분류 가능하게 한다(저장 단계에서 asset_id 매핑).
    */
   scanTransactions(
     addresses: string[],
     cursor: string | null,
+    contractAddresses: string[],
   ): Promise<ScanResult>;
 
   /** 주소의 특정 토큰 잔고를 조회한다. */

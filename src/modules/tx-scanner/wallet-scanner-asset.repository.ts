@@ -5,7 +5,7 @@ import { Injectable, Logger } from '@nestjs/common';
  * monorepo: `wallet.wallet_scanner_asset` (WalletScannerAssetRepository).
  */
 export interface WalletScannerAsset {
-  /** assetId (FK → main.asset.id) */
+  /** PK `id` = 통합 asset id (코인=main.asset.id, 토큰=token 자체 asset_id). 코인/토큰이 한 공간 공유. */
   assetId: number;
   /** start_block_number — 다음 스캔 시작 지점(opaque). null 이면 처음부터(head). */
   startBlockNumber: string | null;
@@ -43,7 +43,7 @@ export class StubWalletScannerAssetRepository implements WalletScannerAssetRepos
     assetId: number,
     startBlockNumber: string | null,
   ): Promise<void> {
-    // TODO(DB): UPSERT wallet_scanner_asset SET start_block_number = ? WHERE asset_id = ?
+    // TODO(DB): UPSERT wallet_scanner_asset SET start_block_number = ? WHERE id = ?
     this.rows.set(assetId, { assetId, startBlockNumber });
     this.logger.log(
       `updateStartBlockNumber(asset#${assetId}) ← ${startBlockNumber}`,

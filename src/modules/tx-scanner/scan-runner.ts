@@ -30,6 +30,8 @@ export class ScanRunner {
     // 스캔에 필요한 계약(symbol/scanIntervalMs/scanTransactions)은 AssetService/TokenService
     // 인터페이스가 이미 강제한다. 별도 Scannable 추상화 없이 둘의 합집합을 받는다.
     private readonly service: AssetService | TokenService,
+    // 토큰일 때 이 token_type 에 속한 토큰 컨트랙트 목록(코인은 빈 배열). 스캔 필터·분류용.
+    private readonly contractAddresses: string[],
     private readonly getAddresses: () => Promise<string[]>,
     // 저장 대상 식별(assetId/tokenTypeId)은 tx-scanner 가 콜백에 바인딩한다.
     private readonly save: (txs: DetectedTx[]) => Promise<void>,
@@ -48,14 +50,10 @@ export class ScanRunner {
   }
 
   get label(): string {
-    const parts: string[] = [];
-    if (this.target.assetId !== undefined) {
-      parts.push(`asset#${this.target.assetId}`);
-    }
     if (this.target.tokenTypeId !== undefined) {
-      parts.push(`token#${this.target.tokenTypeId}`);
+      return `token#${this.target.tokenTypeId}(${this.contractAddresses.length}):${this.service.symbol}`;
     }
-    return `${parts.join('+')}:${this.service.symbol}`;
+    return `asset#${this.target.assetId}:${this.service.symbol}`;
   }
 
   isRunning(): boolean {
@@ -107,11 +105,20 @@ export class ScanRunner {
     while (this.running) {
       try {
         const addresses = await this.getAddresses();
-        // 체인 경계는 불투명 cursor (=startBlockNumber 값을 그대로 전달/회신)
-        const { txs, nextCursor } = await this.service.scanTransactions(
-          addresses,
-          this.startBlockNumber,
-        );
+        // 체인 경계는 불투명 cursor (=startBlockNumber 값을 그대로 전달/회신).
+        // 토큰은 이 token_type 의 컨트랙트 목록을 넘겨 그 토큰들의 transfer 만 수집한다
+        // (각 tx 의 contractAddress 로 저장 단계에서 asset_id 분류).
+        const { txs, nextCursor } =
+          this.target.tokenTypeId !== undefined
+            ? await (this.service as TokenService).scanTransactions(
+                addresses,
+                this.startBlockNumber,
+                this.contractAddresses,
+              )
+            : await (this.service as AssetService).scanTransactions(
+                addresses,
+                this.startBlockNumber,
+              );
         if (txs.length > 0) {
           await this.save(txs);
         }

@@ -9,6 +9,7 @@ import {
   WALLET_SCANNER_ASSET_REPOSITORY,
   StubWalletScannerAssetRepository,
 } from './wallet-scanner-asset.repository';
+import { TOKEN_REPOSITORY, StubTokenRepository } from './token.repository';
 import { TxScannerService } from './tx-scanner.service';
 
 @Module({
@@ -24,6 +25,11 @@ import { TxScannerService } from './tx-scanner.service';
     {
       provide: DETECTED_TRANSACTIONS_REPOSITORY,
       useClass: StubDetectedTransactionsRepository,
+    },
+    // 토큰 메타(main.token) 저장소(현재 in-memory stub). token_type → 토큰 목록 조회.
+    {
+      provide: TOKEN_REPOSITORY,
+      useClass: StubTokenRepository,
     },
   ],
   exports: [TxScannerService],

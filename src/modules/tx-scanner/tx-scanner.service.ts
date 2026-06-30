@@ -6,7 +6,6 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { BlockchainService } from '../blockchain/blockchain.service';
-import { TokenTypeId } from '../blockchain/constants';
 import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
@@ -19,35 +18,15 @@ import {
   WALLET_SCANNER_ASSET_REPOSITORY,
   WalletScannerAssetRepository,
 } from './wallet-scanner-asset.repository';
+import {
+  TOKEN_REPOSITORY,
+  TokenRepository,
+  TokenRow,
+} from './token.repository';
 import { ScanRunner } from './scan-runner';
 
 /** 워치독 점검 주기(ms). */
 const WATCHDOG_INTERVAL_MS = 60_000;
-
-/**
- * 토큰 타입 → 저장 assetId stub (코인 assetId 와 안 겹치게 1001+).
- *
- * ⚠️ prototype 전용 stub. **monorepo 는 assetRepository/tokenRepository 로 실제 assetId 를 조회**한다
- *   (자산=assetRepository, 토큰=tokenRepository 의 token contract→assetId). TODO(DB).
- */
-const STUB_TOKEN_ASSET_ID: Record<number, number> = {
-  [TokenTypeId.KIP7]: 1001,
-  [TokenTypeId.KONETTOKEN]: 1002,
-  [TokenTypeId.BASETOKEN]: 1003,
-  [TokenTypeId.SPL]: 1004,
-  [TokenTypeId.TRC20]: 1005,
-};
-
-/** ScanTarget → 저장/진행지점 행 키 assetId (토큰이면 토큰타입 stub assetId). */
-function resolveStoreAssetId(target: ScanTarget): number {
-  if (target.assetId !== undefined) {
-    return target.assetId;
-  }
-  if (target.tokenTypeId !== undefined) {
-    return STUB_TOKEN_ASSET_ID[target.tokenTypeId] ?? target.tokenTypeId;
-  }
-  return 0;
-}
 
 /**
  * 대상 주소의 모든 in/out tx 를 감지하여 저장하는 스캐너.
@@ -74,21 +53,30 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     private readonly detectedRepository: DetectedTransactionsRepository,
     @Inject(WALLET_SCANNER_ASSET_REPOSITORY)
     private readonly scannerAssetRepository: WalletScannerAssetRepository,
+    @Inject(TOKEN_REPOSITORY)
+    private readonly tokenRepository: TokenRepository,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     const assetServices = this.blockchain.getAllAssetServices();
     const tokenServices = this.blockchain.getAllTokenServices();
 
+    // 코인(네이티브 자산): 자산당 러너 1개.
     for (const service of assetServices) {
-      this.runners.push(
-        this.createRunner({ assetId: service.getAssetId() }, service),
-      );
+      this.runners.push(this.createAssetRunner(service));
     }
+
+    // 토큰: 한 토큰 서비스(=token_type)당 러너 1개. main.token 에서 그 타입의 토큰 목록
+    // [(assetId, contractAddress)] 을 받아 **한 루프**로 스캔하고, 결과 tx 를 contractAddress
+    // 로 분류해 각 토큰의 asset_id 로 저장한다. 진행지점은 그 토큰 행들이 함께 갱신된다.
     for (const service of tokenServices) {
-      this.runners.push(
-        this.createRunner({ tokenTypeId: service.getTokenTypeId() }, service),
+      const tokens = await this.tokenRepository.getTokensByType(
+        service.getTokenTypeId(),
       );
+      if (tokens.length === 0) {
+        continue; // 추적할 토큰이 없으면 러너를 만들지 않는다.
+      }
+      this.runners.push(this.createTokenRunner(service, tokens));
     }
 
     this.runners.forEach((r) => r.start());
@@ -108,15 +96,14 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     await Promise.all(this.runners.map((r) => r.stop()));
   }
 
-  private createRunner(
-    target: ScanTarget,
-    service: AssetService | TokenService,
-  ): ScanRunner {
-    // wallet_scanner_asset 행 키 / detected_transactions assetId = 저장 assetId
-    const assetId = resolveStoreAssetId(target);
+  /** 코인 러너: 자산 1개. 저장/진행지점 키 = 코인 assetId. */
+  private createAssetRunner(service: AssetService): ScanRunner {
+    const assetId = service.getAssetId();
+    const target: ScanTarget = { assetId };
     return new ScanRunner(
       target,
       service,
+      [], // 코인은 컨트랙트 목록 없음
       () => this.wallets.getScanAddresses(target),
       (txs) => this.saveDetected(assetId, txs),
       () => this.scannerAssetRepository.getStartBlockNumber(assetId),
@@ -125,12 +112,72 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** DetectedTx 를 detected_transactions 에 저장(매퍼 없이 거의 1:1, amount 만 NOT NULL 기본값). */
+  /**
+   * 토큰 러너: token_type 1개(여러 토큰을 한 루프로). contractAddress→assetId 맵으로 분류 저장하고,
+   * 진행지점은 이 타입의 토큰 행들을 **모두 같은 값으로** 갱신한다(같이 도므로).
+   */
+  private createTokenRunner(
+    service: TokenService,
+    tokens: TokenRow[],
+  ): ScanRunner {
+    const target: ScanTarget = { tokenTypeId: service.getTokenTypeId() };
+    const contractAddresses = tokens.map((t) => t.contractAddress);
+    const assetIdByContract = new Map(
+      tokens.map((t) => [t.contractAddress, t.assetId]),
+    );
+    const assetIds = tokens.map((t) => t.assetId);
+    return new ScanRunner(
+      target,
+      service,
+      contractAddresses,
+      () => this.wallets.getScanAddresses(target),
+      (txs) => this.saveDetectedTokens(assetIdByContract, txs),
+      // 같은 타입의 토큰 행은 값이 같으므로 대표(첫 토큰) 행에서 로드.
+      () => this.scannerAssetRepository.getStartBlockNumber(assetIds[0]),
+      // 이 타입의 모든 토큰 행을 같은 값으로 갱신.
+      async (sbn) => {
+        for (const id of assetIds) {
+          await this.scannerAssetRepository.updateStartBlockNumber(id, sbn);
+        }
+      },
+      this.logger,
+    );
+  }
+
+  /** 코인 DetectedTx 저장(매퍼 없이 거의 1:1, amount 만 NOT NULL 기본값). */
   private async saveDetected(
     assetId: number,
     txs: DetectedTx[],
   ): Promise<void> {
     for (const tx of txs) {
+      await this.detectedRepository.insertDetectedTransactions({
+        assetId,
+        fromAddress: tx.fromAddress,
+        toAddress: tx.toAddress,
+        txId: tx.txHash,
+        blockNumber: tx.blockNumber,
+        amount: tx.amount ?? '0',
+        note: tx.memoId,
+        status: 0,
+      });
+    }
+  }
+
+  /**
+   * 토큰 DetectedTx 저장: 각 tx 의 `contractAddress` 로 어느 토큰인지 분류해
+   * 그 토큰의 asset_id 로 insert 한다(한 token_type 루프가 여러 토큰을 처리).
+   */
+  private async saveDetectedTokens(
+    assetIdByContract: Map<string, number>,
+    txs: DetectedTx[],
+  ): Promise<void> {
+    for (const tx of txs) {
+      const assetId = tx.contractAddress
+        ? assetIdByContract.get(tx.contractAddress)
+        : undefined;
+      if (assetId === undefined) {
+        continue; // 추적 대상 토큰이 아니면 skip
+      }
       await this.detectedRepository.insertDetectedTransactions({
         assetId,
         fromAddress: tx.fromAddress,

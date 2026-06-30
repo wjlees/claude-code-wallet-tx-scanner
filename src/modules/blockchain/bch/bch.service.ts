@@ -16,7 +16,7 @@ import {
 @Injectable()
 export class BchService implements AssetService, OnModuleInit {
   private readonly cfg: UtxoAssetConfig = { symbol: 'bch', path: 'bch' };
-  readonly scanIntervalMs = 5000;
+  readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('BchService');
   /** 1회 스캔 블록 수. 노드+maxDepositScanRange 둘 다 있어야 스캔. 없으면 skip. */
   private maxDepositScanRange?: number;

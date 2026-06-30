@@ -8,11 +8,6 @@ import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
 
 const SOL_PATH = 'sol'; // SOL 노드 공유, scan range 도 sol path
 
-/** SPL Token Program */
-const TOKEN_PROGRAM_ID = new PublicKey(
-  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-);
-
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface SplState {
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
@@ -65,6 +60,7 @@ export class SplService implements TokenService, OnModuleInit {
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
+    contractAddresses: string[],
   ): Promise<ScanResult> {
     const { connection } = this.state;
     if (!connection) {
@@ -76,27 +72,33 @@ export class SplService implements TokenService, OnModuleInit {
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 
-    for (const owner of addresses) {
-      const { value: tokenAccounts } =
-        await connection.getParsedTokenAccountsByOwner(new PublicKey(owner), {
-          programId: TOKEN_PROGRAM_ID,
-        });
-
-      for (const { pubkey } of tokenAccounts) {
-        const sigs = await connection.getSignaturesForAddress(pubkey, {
-          until: cursor ?? undefined,
-          limit,
-        });
-        if (sigs.length > 0 && newest === cursor) {
-          newest = sigs[0].signature;
-        }
-        for (const sig of sigs) {
-          // signature 만 수집. from/to·amount·mint 는 getParsedTransaction 파싱 필요(TODO).
-          txs.push({
-            txHash: sig.signature,
-            blockNumber: sig.slot,
-            raw: sig,
+    // 이 token_type 의 토큰들(mint 목록)을 한 번에. 각 tx 는 contractAddress=mint 로 분류 가능.
+    for (const contractAddress of contractAddresses) {
+      const mint = new PublicKey(contractAddress);
+      for (const owner of addresses) {
+        // 이 mint 의 토큰계정(ATA)만 조회 → 해당 토큰 transfer 만 본다.
+        const { value: tokenAccounts } =
+          await connection.getParsedTokenAccountsByOwner(new PublicKey(owner), {
+            mint,
           });
+
+        for (const { pubkey } of tokenAccounts) {
+          const sigs = await connection.getSignaturesForAddress(pubkey, {
+            until: cursor ?? undefined,
+            limit,
+          });
+          if (sigs.length > 0 && newest === cursor) {
+            newest = sigs[0].signature;
+          }
+          for (const sig of sigs) {
+            // signature 만 수집. from/to·amount 는 getParsedTransaction 파싱 필요(TODO).
+            txs.push({
+              txHash: sig.signature,
+              contractAddress,
+              blockNumber: sig.slot,
+              raw: sig,
+            });
+          }
         }
       }
     }

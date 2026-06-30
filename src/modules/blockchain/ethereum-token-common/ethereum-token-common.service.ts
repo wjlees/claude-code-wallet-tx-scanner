@@ -87,6 +87,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
+    contractAddresses: string[],
   ): Promise<ScanResult> {
     const { baseAssetService, maxDepositScanRange } = this.state;
     const web3 = baseAssetService?.getWeb3();
@@ -104,13 +105,17 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
 
     const topics = addresses.map(toTopic);
 
-    // to(topic2) 또는 from(topic1) 이 감시 주소인 Transfer 로그 수집 후 dedupe
+    // 이 token_type 의 토큰들(contractAddresses)의 Transfer 만: address 로 컨트랙트들을 한정하고
+    // to(topic2) 또는 from(topic1) 이 감시 주소인 로그 수집 후 dedupe.
+    // (각 tx 는 toDetected 에서 log.address 로 contractAddress 가 채워져 토큰 분류 가능)
     const incoming = await web3.eth.getPastLogs({
+      address: contractAddresses,
       fromBlock: from,
       toBlock: to,
       topics: [TRANSFER_TOPIC, null, topics],
     } as any);
     const outgoing = await web3.eth.getPastLogs({
+      address: contractAddresses,
       fromBlock: from,
       toBlock: to,
       topics: [TRANSFER_TOPIC, topics],
@@ -138,6 +143,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
       toAddress: log.topics?.[2]
         ? '0x' + String(log.topics[2]).slice(26)
         : undefined,
+      contractAddress: log.address ? String(log.address) : undefined,
       amount: log.data ? BigInt(log.data).toString() : undefined,
       blockNumber:
         log.blockNumber !== undefined ? Number(log.blockNumber) : undefined,

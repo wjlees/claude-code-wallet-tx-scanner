@@ -16,9 +16,7 @@ const TRC20_PATH = 'trc20';
  *
  * 기반 자산 TRX(TrxService)의 tronweb 노드를 재사용한다(새 connection 만들지 않음).
  * 스캔: cursor=마지막 스캔 블록번호. 블록의 TriggerSmartContract 중 transfer 호출을 디코드해
- *       to/owner 가 대상 주소면 in/out 으로 수집한다.
- *
- * NOTE: 추적할 개별 TRC20 컨트랙트 주소는 DB 에서 가져온다(현재는 전체 transfer 매칭).
+ *       **이 토큰(contractAddress)** 의 to/owner 가 대상 주소면 in/out 으로 수집한다.
  */
 @Injectable()
 export class Trc20Service implements TokenService, OnModuleInit {
@@ -52,6 +50,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
   async scanTransactions(
     addresses: string[],
     cursor: string | null,
+    contractAddresses: string[],
   ): Promise<ScanResult> {
     const tronWeb = this.trx.getTronWeb();
     if (!tronWeb || this.maxDepositScanRange === undefined) {
@@ -67,6 +66,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
     const to = Math.min(from + this.maxDepositScanRange - 1, head);
 
     const watch = new Set(addresses);
+    const contracts = new Set(contractAddresses); // 이 token_type 의 토큰 컨트랙트들
     const txs: DetectedTx[] = [];
 
     for (let n = from; n <= to; n++) {
@@ -89,16 +89,18 @@ export class Trc20Service implements TokenService, OnModuleInit {
         const contractAddr = v.contract_address
           ? tronWeb.address.fromHex(v.contract_address)
           : undefined;
+        // 이 token_type 에 속한 토큰 컨트랙트의 transfer 만.
+        if (!contractAddr || !contracts.has(contractAddr)) continue;
 
         if (watch.has(toAddress) || (fromAddress && watch.has(fromAddress))) {
           txs.push({
             txHash: tx.txID,
             fromAddress,
             toAddress,
+            contractAddress: contractAddr,
             amount: amount.toString(),
             blockNumber: n,
-            // NOTE: contractAddr 는 추후 token assetId 해석(§5-6)에 사용 예정
-            raw: { txID: tx.txID, contract: contractAddr },
+            raw: { txID: tx.txID },
           });
         }
       }
