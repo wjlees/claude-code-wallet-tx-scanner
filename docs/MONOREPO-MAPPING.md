@@ -69,20 +69,19 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 ```
 
 ## 5. 정렬 상태
-**prototype 반영 완료 (2026-06-29):**
-1. ✅ **ParamStore 모델**: `getParametersByPath(path)` + path별 `{ nodeUrl, maxScanRange }` 로 전환. 헬퍼 `getNodeUrlByPath`/`getMaxScanRange(path)`.
-2. ✅ **scan range**: `maxScanRange` (path별). 미설정이면 **log 후 skip**(throw 안 함, 부팅 계속 — 노드 미설정과 동일). 양쪽 동일.
-3. ✅ **진행 지점 테이블**: `wallet_scanner_asset.start_block_number` 로 맞춤(`WalletScannerAssetRepository`). main.asset 와 분리.
-6. ✅ **자산 로스터**: monorepo 기준 일치 — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken, sol/spl/xlm/btc/bch/trx/trc20/xrp/xpla. (ETH/POL/erc20 제거)
 
-**계약 표면 정렬 완료 (2026-06-29, monorepo 반영됨):**
-7. ✅ **스캔 계약 인터페이스 통합**: monorepo 가 `Scannable*` 인터페이스 + `isScannable*` 가드 제거, 스캔 계약을 `AssetService`/`TokenService` 에 통합, `ScannableBlockchainService` 삭제 → `BlockchainService` 단일 진입점. legacy 출금 전용 모듈 정리. **양쪽 동일 구조.**
+**✅ 완료 (양쪽 일치, monorepo 확인됨):**
+1. **ParamStore 모델** — `getParametersByPath(path)` + path별 `{ nodeUrl, maxScanRange }`. 헬퍼 `getNodeUrlByPath`/`getMaxScanRange(path)`.
+2. **scan range** — `maxScanRange`(path별). 미설정이면 **log 후 skip**(throw 안 함, 부팅 계속 — 노드 미설정과 동일).
+3. **진행 지점 테이블** — `wallet_scanner_asset.start_block_number`(`WalletScannerAssetRepository`, main.asset 분리). 키=`asset_id` 단독.
+4. **자산 로스터** — EVM konet/klay/cross/base + 토큰 kip7/konetToken/baseToken + sol/spl/xlm/btc/bch/trx/trc20/xpla. (ETH/POL/erc20 제거. **xrp 예외 — 아래 주의 참조**)
+5. **스캔 계약/진입점** — 스캔 계약을 `AssetService`/`TokenService` 에 통합(별도 `Scannable*`/가드 제거), `BlockchainService` 단일 진입점. legacy 출금 전용 모듈 정리.
 
-**아직 양쪽 미정렬 (둘 다 작업 필요):**
-4. ⏳ **토큰 저장 assetId**: 목표=토큰 자체 assetId(`main.asset`), `main.token` 의 contractAddress→assetId 로 per-tx 해석. **양쪽 mapper 모두 현재 토큰타입 단위(기반/stub) — 미정렬.** prototype 은 stub assetId(1001+) 유지 + TODO.
-5. ⏳ **detected_transactions 멱등**: 양쪽 **미구현**. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후 구현.
+**⏳ 아직 양쪽 미정렬 (다음 sync 작업):**
+6. **토큰 detected_transactions.assetId** — 목표=토큰 자체 assetId(`main.token` 의 contractAddress→assetId per-tx). 현재 양쪽 모두 토큰타입 단위(기반 체인 id / stub). prototype 은 stub 1001+ 유지 + TODO.
+7. **detected_transactions 멱등** — 양쪽 미구현. unique index 후보 `(asset_id, tx_id, from_address, to_address)`. migration+app 합의 후.
 
-**해결 약속:**
-- **nodeUrl**: prototype `nodeUrl` ≡ monorepo path 객체의 자산별 URL 필드(`host`/`gethUrl` 등). 같은 의미(node RPC 주소)로 취급(§1).
-
-> 참고(심볼/값): `AssetId`/`TokenTypeId` 숫자값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).
+**주의/약속:**
+- **xrp**: prototype 로스터엔 있으나 monorepo `BlockchainService` **미등록**(추후 추가 예정) — 현재 유일한 로스터 차이.
+- **nodeUrl**: prototype `nodeUrl` ≡ monorepo path 객체의 자산별 URL 필드(`host`/`gethUrl` 등) — 같은 의미(node RPC 주소)로 취급(§1).
+- **숫자값**: `AssetId`/`TokenTypeId` 값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).
