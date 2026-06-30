@@ -143,7 +143,10 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
       toAddress: log.topics?.[2]
         ? '0x' + String(log.topics[2]).slice(26)
         : undefined,
-      contractAddress: log.address ? String(log.address) : undefined,
+      // EVM 주소는 대소문자 무관(체크섬) → lowercase 로 정규화해 contractAddress→asset_id 분류 일치.
+      contractAddress: log.address
+        ? String(log.address).toLowerCase()
+        : undefined,
       amount: log.data ? BigInt(log.data).toString() : undefined,
       blockNumber:
         log.blockNumber !== undefined ? Number(log.blockNumber) : undefined,

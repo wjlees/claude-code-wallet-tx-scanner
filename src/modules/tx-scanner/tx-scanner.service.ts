@@ -172,8 +172,10 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     txs: DetectedTx[],
   ): Promise<void> {
     for (const tx of txs) {
+      // 정확 매칭 우선, 실패 시 lowercase fallback(EVM 체크섬 대응; SPL/TRC20 base58 은 정확 매칭에서 끝남).
       const assetId = tx.contractAddress
-        ? assetIdByContract.get(tx.contractAddress)
+        ? (assetIdByContract.get(tx.contractAddress) ??
+          assetIdByContract.get(tx.contractAddress.toLowerCase()))
         : undefined;
       if (assetId === undefined) {
         continue; // 추적 대상 토큰이 아니면 skip
