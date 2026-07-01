@@ -121,6 +121,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
             toAddress,
             amount: tx.value !== undefined ? String(tx.value) : undefined,
             blockNumber: n,
+            txIndex: 0, // 네이티브 전송은 tx 자체가 1건 → 위치 0
             raw: tx,
           });
         }

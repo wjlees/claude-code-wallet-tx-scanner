@@ -76,6 +76,7 @@ export class UtxoRpcClient {
               toAddress: hit,
               amount: vout.value !== undefined ? String(vout.value) : undefined,
               blockNumber: height,
+              txIndex: vout.n, // vout 인덱스 = tx 내 위치(같은 주소 다중 vout 구분)
               raw: tx,
             });
           }

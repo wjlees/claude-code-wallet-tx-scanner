@@ -100,6 +100,7 @@ export class XplaService implements AssetService, OnModuleInit {
               amount: amounts[i],
               memoId: memo,
               blockNumber: n,
+              txIndex: i, // tx 내 transfer 이벤트 순번
               raw: { txhash: txr.txhash },
             });
           }

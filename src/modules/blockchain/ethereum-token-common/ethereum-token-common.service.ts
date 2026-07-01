@@ -147,6 +147,8 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
       contractAddress: log.address
         ? String(log.address).toLowerCase()
         : undefined,
+      // tx 내 위치 = 로그의 logIndex(블록 단위지만 tx 내에서 유일 → 멱등 키에 충분).
+      txIndex: log.logIndex !== undefined ? Number(log.logIndex) : undefined,
       amount: log.data ? BigInt(log.data).toString() : undefined,
       blockNumber:
         log.blockNumber !== undefined ? Number(log.blockNumber) : undefined,

@@ -30,6 +30,13 @@ export interface DetectedTx {
   toAddress?: string;
   /** 토큰 컨트랙트/mint 주소 (토큰 transfer 일 때). 저장 시 contractAddress→asset_id 분류에 사용. */
   contractAddress?: string;
+  /**
+   * tx 내 위치 인덱스 (멱등 유니크 키 `(asset_id, tx_id, tx_index)` 의 3번째).
+   * 한 tx 가 동일한 transfer 를 여러 건 담을 수 있어(EVM 배치, UTXO 다중 vout) 이걸로 구분한다.
+   * EVM=`log.logIndex`, UTXO=vout `n`, XPLA=이벤트 순번. 위치 개념이 없거나 tx당 1건이면 0.
+   * (SOL/SPL 은 transfer 파싱 전이라 현재 미설정 → 저장 시 0 취급, signature 단위 dedup.)
+   */
+  txIndex?: number;
   /** 금액 (문자열, 최소단위) */
   amount?: string;
   /** 입금 식별용 memoId/DestinationTag 등 */

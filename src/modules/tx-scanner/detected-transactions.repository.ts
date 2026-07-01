@@ -10,6 +10,8 @@ export interface InsertDetectedTransactionParams {
   fromAddress?: string;
   toAddress?: string;
   txId?: string;
+  /** tx 내 위치 인덱스 (멱등 유니크 키 `(assetId, txId, txIndex)` 의 3번째). 기본 0. */
+  txIndex?: number;
   blockNumber?: number;
   /** required (decimal 문자열, 최소단위) */
   amount: string;
@@ -40,12 +42,21 @@ export const DETECTED_TRANSACTIONS_REPOSITORY =
 export class StubDetectedTransactionsRepository implements DetectedTransactionsRepository {
   private readonly logger = new Logger('DetectedTransactionsRepository');
   private seq = 0;
+  /** 멱등 시연용: 이미 본 (assetId, txId, txIndex) 키. 실 DB 에선 unique index 가 담당. */
+  private readonly seen = new Set<string>();
 
   async insertDetectedTransactions(
     params: InsertDetectedTransactionParams,
   ): Promise<number> {
-    // TODO(DB): INSERT INTO detected_transactions ...
-    //   멱등: (assetId, txId, fromAddress/toAddress) unique 또는 insert 전 exists 체크.
+    // 멱등 유니크 키 = (assetId, txId, txIndex). 실 DB:
+    //   UNIQUE (asset_id, tx_id, tx_index) + INSERT ... ON CONFLICT DO NOTHING.
+    // stub 은 Set 으로 재삽입(재스캔·cursor 겹침)을 흡수해 중복 저장을 막는다.
+    const key = `${params.assetId}:${params.txId}:${params.txIndex ?? 0}`;
+    if (this.seen.has(key)) {
+      this.logger.log(`skip duplicate ${key} (ON CONFLICT DO NOTHING)`);
+      return 0;
+    }
+    this.seen.add(key);
     const id = ++this.seq;
     this.logger.log(`insert #${id} ${JSON.stringify(params)}`);
     return id;
