@@ -98,7 +98,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **tx_index = `log.logIndex`(결정적)**. ⚠️ monorepo 토큰 scanBlocks 의 0-based 카운터(`buildUpAddressToTransactions`)는 `Promise.all(assetIds)` **공유 카운터라 멀티토큰 tx 에서 재스캔 시 값이 흔들려 멱등 깨질 위험** → **logIndex 로 교체 권장**.
    - **금액 = raw 최소단위(blockchain), scale 은 tx-scanner**. **from/to**(in/out 의미부여 X, §8).
    - **반환 = flat `DetectedTx[]`**(prototype). monorepo grouped `{[assetId]:{[toAddress]:[]}}` 는 동등·표기차.
-   - **성능**: batch+병렬 — prototype `ethereum-common/evm-batch.ts`(`jsonRpcBatch`: JSON-RPC 배열 + 청크 Promise.all), monorepo `usingBatchRequest`/`getBlocks`/`getTransactionsByBatch`. ✅ 개념 일치.
+   - **성능**: **`usingBatchRequest` 플래그로 batch/promise 선택**(양쪽 동일 개념). prototype=`EthereumBasedAssetType.usingBatchRequest` → `EthereumCommonService.getBlocks`/`getReceipts`(true=JSON-RPC 배열 batch 청크 병렬, false=web3 개별 Promise.all). monorepo=`state.ethereumBasedAsset.usingBatchRequest` → `blockRangeToScanedTxsByBatch`(getBlocks/getTransactionsByBatch) / `blockRangeToScanedTxsByPromise`. ✅ 일치.
    - **prototype 완료**(2026-07-01, EVM native+token). 다른 체인(UTXO=value>0, 그 외)은 같은 원칙 확장 **TODO(양쪽)**.
    - **monorepo TODO**: (1) 토큰 tx_index 0-based→**logIndex**(멱등 안전), (2) confirmations 스냅샷→**endBlock 캡**, (3) 토큰 진행지점 `metadataRepository(metadataKey)`→**`wallet_scanner_asset`** 로 일원화.
 

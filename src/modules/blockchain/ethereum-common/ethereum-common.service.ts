@@ -8,11 +8,23 @@ import {
   getMaxDepositScanRange,
   getNodeUrlByPath,
 } from '../parameter-store';
-import { jsonRpcBatch, numberToHex } from './evm-batch';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
 } from './ethereum-based-assets';
+
+/** 한 JSON-RPC batch 페이로드에 담는 최대 요청 수. */
+const BATCH_CHUNK = 100;
+
+function numberToHex(n: number): string {
+  return '0x' + n.toString(16);
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태 (네트워크 설정 + 노드 핸들). */
 interface EthereumCommonState {
@@ -115,25 +127,19 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
 
     const watch = new Set(addresses.map((a) => a.toLowerCase()));
 
-    // 1) 블록 범위를 hydrated(fullTransactions)로 batch+병렬 fetch.
+    // 1) 블록 범위를 hydrated(fullTransactions)로 fetch (usingBatchRequest 에 따라 batch/promise).
     const blockNumbers: number[] = [];
     for (let n = from; n <= to; n++) blockNumbers.push(n);
-    const blocks = await jsonRpcBatch(
-      nodeUrl,
-      blockNumbers.map((n) => ({
-        method: 'eth_getBlockByNumber',
-        params: [numberToHex(n), true],
-      })),
-    );
+    const blocks = await this.getBlocks(blockNumbers);
 
-    // 2) from/to 매칭 + value>0(0금액/피싱 제외) 후보 수집.
+    // 2) from/to 매칭 + value>0(0금액/피싱 제외) 후보 수집. (blockNumber 는 요청값으로)
     const candidates: { tx: any; blockNumber: number }[] = [];
-    for (const block of blocks) {
-      if (!block) continue;
-      const bn = Number(block.number);
+    blockNumbers.forEach((bn, i) => {
+      const block = blocks[i];
+      if (!block) return;
       for (const tx of block.transactions ?? []) {
         if (typeof tx === 'string') continue;
-        const value = tx.value ? BigInt(tx.value) : 0n;
+        const value = tx.value != null ? BigInt(tx.value) : 0n;
         if (value <= 0n) continue;
         const fromA = tx.from ? String(tx.from).toLowerCase() : undefined;
         const toA = tx.to ? String(tx.to).toLowerCase() : undefined;
@@ -141,16 +147,10 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
           candidates.push({ tx, blockNumber: bn });
         }
       }
-    }
+    });
 
-    // 3) 후보 tx 만 receipt batch → status===1(성공)만 채택.
-    const receipts = await jsonRpcBatch(
-      nodeUrl,
-      candidates.map((c) => ({
-        method: 'eth_getTransactionReceipt',
-        params: [c.tx.hash],
-      })),
-    );
+    // 3) 후보 tx 만 receipt fetch → status===1(성공)만 채택.
+    const receipts = await this.getReceipts(candidates.map((c) => c.tx.hash));
     const txs: DetectedTx[] = [];
     candidates.forEach((c, i) => {
       const receipt = receipts[i];
@@ -170,6 +170,72 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       `scanned blocks ${from}~${to} @ ${this.networkName} (safeHead=${safeHead}) → ${txs.length} tx`,
     );
     return { txs, nextCursor: String(to) };
+  }
+
+  /**
+   * 블록 범위를 hydrated(fullTransactions)로 조회. `usingBatchRequest` 에 따라
+   * JSON-RPC batch(한 페이로드) 또는 web3 개별 호출 Promise.all 병렬.
+   * 반환은 요청 순서와 동일.
+   */
+  private async getBlocks(numbers: number[]): Promise<any[]> {
+    if (this.state.config.usingBatchRequest) {
+      return this.jsonRpcBatch(
+        numbers.map((n) => ({
+          method: 'eth_getBlockByNumber',
+          params: [numberToHex(n), true],
+        })),
+      );
+    }
+    const web3 = this.state.web3!;
+    return Promise.all(numbers.map((n) => web3.eth.getBlock(n, true)));
+  }
+
+  /** 후보 tx 의 receipt 조회. batch/promise 모드는 getBlocks 와 동일 정책. */
+  private async getReceipts(hashes: string[]): Promise<any[]> {
+    if (hashes.length === 0) return [];
+    if (this.state.config.usingBatchRequest) {
+      return this.jsonRpcBatch(
+        hashes.map((h) => ({
+          method: 'eth_getTransactionReceipt',
+          params: [h],
+        })),
+      );
+    }
+    const web3 = this.state.web3!;
+    return Promise.all(hashes.map((h) => web3.eth.getTransactionReceipt(h)));
+  }
+
+  /**
+   * JSON-RPC batch: 요청을 청크로 나눠 각 청크를 배열 페이로드 1회로 보내고(왕복↓),
+   * 청크들은 Promise.all 로 병렬 전송. 결과는 입력 순서대로 정렬.
+   */
+  private async jsonRpcBatch(
+    calls: { method: string; params: unknown[] }[],
+  ): Promise<any[]> {
+    if (calls.length === 0) return [];
+    const url = this.state.nodeUrl!;
+    const perChunk = await Promise.all(
+      chunk(calls, BATCH_CHUNK).map(async (group) => {
+        const body = group.map((c, i) => ({
+          jsonrpc: '2.0',
+          id: i,
+          method: c.method,
+          params: c.params,
+        }));
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          throw new Error(`JSON-RPC batch HTTP ${res.status}`);
+        }
+        const json = (await res.json()) as { id: number; result?: any }[];
+        const byId = new Map(json.map((j) => [j.id, j.result]));
+        return group.map((_, i) => byId.get(i));
+      }),
+    );
+    return perChunk.flat();
   }
 
   async getBalance(address: string): Promise<string> {

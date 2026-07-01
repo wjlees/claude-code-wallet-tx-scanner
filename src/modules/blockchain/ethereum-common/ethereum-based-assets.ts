@@ -18,6 +18,11 @@ export interface EthereumBasedAssetType {
   hardfork?: string;
   /** 자산(코인) 심볼 (서비스 symbol = monorepo 서비스 symbol) */
   assetName: string;
+  /**
+   * 블록/receipt fetch 방식 선택. true=JSON-RPC batch(한 페이로드), false=Promise.all 개별 병렬.
+   * 노드가 batch 를 지원/선호하면 true. (monorepo `usingBatchRequest` 와 동일)
+   */
+  usingBatchRequest: boolean;
 }
 
 /**
@@ -31,18 +36,21 @@ export const ethereumBasedAssets: Record<number, EthereumBasedAssetType> = {
     path: 'konet',
     EIP1559: false,
     assetName: 'konet',
+    usingBatchRequest: true,
   },
   [AssetId.KLAY]: {
     networkName: 'klaytn',
     path: 'klay',
     EIP1559: false,
     assetName: 'klay',
+    usingBatchRequest: true,
   },
   [AssetId.CROSS]: {
     networkName: 'cross',
     path: 'cross',
     EIP1559: true,
     assetName: 'cross',
+    usingBatchRequest: true,
   },
   [AssetId.BASE]: {
     networkName: 'base',
@@ -50,6 +58,7 @@ export const ethereumBasedAssets: Record<number, EthereumBasedAssetType> = {
     EIP1559: true,
     hardfork: 'cancun',
     assetName: 'base',
+    usingBatchRequest: true,
   },
 };
 
