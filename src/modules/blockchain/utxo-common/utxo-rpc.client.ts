@@ -1,15 +1,22 @@
 import { BigNumber } from 'bignumber.js';
 import { DetectedTx } from '../interfaces/scan.types';
 
+type BN = InstanceType<typeof BigNumber>;
+
 /**
  * bitcoind 계열 노드(Bitcoin Core / Bitcoin Cash Node)용 저수준 JSON-RPC 클라이언트.
  *
  * 노드 1개(=URL 1개)에 대응한다. BTC/BCH 가 각자 자기 노드로 인스턴스를 만든다.
  * 노드 URL 은 `http://user:pass@host:port` 형태를 지원(자격증명은 Basic 헤더로 변환).
  *
- * Bitcoin Core 는 임의 주소 인덱스가 없으므로, 여기서는 블록을 verbose(2)로 받아
- * **vout 의 수신 주소**가 대상이면 'in' 으로 감지한다.
- * 'out'(우리 UTXO 소비)은 prevout 추적이 필요해 watch-only 지갑(listsinceblock)이 더 적합 → TODO.
+ * 감지:
+ *  - **수신(vout)**: vout 수신 주소가 대상이면 기록.
+ *  - **출금·수수료(vin)**: vin 이 우리 주소의 UTXO 를 소비하면 우리가 낸 tx → fee=Σvin−Σvout 로
+ *    native fee 행 기록(§14). vin 은 prevout 값·주소가 필요:
+ *    · `prevoutInline`(getblock verbosity 3, Core 25+): 블록 응답의 `vin.prevout` 인라인(추가 콜 0).
+ *    · 미지원: vin 마다 `getrawtransaction` 으로 prevout 조회(fallback; 저볼륨 체인용).
+ *  NOTE: 대규모 체인에서 fallback 은 무거움 → 실제로는 `crypto_address_unspents` 테이블 권장(개선사항).
+ *  NOTE: 우리에게 돌아오는 change vout 도 '수신'으로 잡힘(change 판별은 별도 검토).
  */
 export class UtxoRpcClient {
   private readonly endpoint: string;
@@ -51,39 +58,117 @@ export class UtxoRpcClient {
     return this.rpc<number>('getblockcount');
   }
 
-  /** from..to 블록을 스캔해 vout 수신이 대상 주소인 tx 를 'in' 으로 반환 */
+  /** scriptPubKey 에서 주소 목록 추출(구/신 필드 모두 대응). */
+  private outAddrs(spk: any): string[] {
+    return spk?.address ? [spk.address] : (spk?.addresses ?? []);
+  }
+
+  /** BTC 소수 값 → satoshi(8자리) 정수 문자열. */
+  private toSat(btc: BN | string | number): string {
+    return new BigNumber(btc).shiftedBy(8).toFixed(0);
+  }
+
+  /** tx 의 vin prevout(주소·값)을 해소. inline(v3) 이면 vin.prevout, 아니면 getrawtransaction. */
+  private async resolveVins(
+    tx: any,
+    prevoutInline: boolean,
+  ): Promise<{ address?: string; value: number }[]> {
+    const out: { address?: string; value: number }[] = [];
+    for (const vin of tx.vin ?? []) {
+      if (vin.coinbase) continue; // 코인베이스는 prevout 없음
+      if (prevoutInline) {
+        const p = vin.prevout;
+        if (!p) continue;
+        out.push({
+          address: this.outAddrs(p.scriptPubKey)[0],
+          value: Number(p.value),
+        });
+      } else {
+        const prev = await this.rpc<any>('getrawtransaction', [vin.txid, true]);
+        const pv = prev?.vout?.[vin.vout];
+        if (!pv) continue;
+        out.push({
+          address: this.outAddrs(pv.scriptPubKey)[0],
+          value: Number(pv.value),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** from..to 블록을 스캔: 수신(vout∈watch) + 출금/fee(vin∈watch, §14) 를 반환. */
   async scanRange(
     from: number,
     to: number,
     addresses: string[],
+    prevoutInline: boolean,
   ): Promise<DetectedTx[]> {
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
 
     for (let height = from; height <= to; height++) {
       const hash = await this.rpc<string>('getblockhash', [height]);
-      const block = await this.rpc<any>('getblock', [hash, 2]); // verbose tx
+      // verbosity 3 = vin.prevout 인라인(Core 25+), 아니면 2.
+      const block = await this.rpc<any>('getblock', [
+        hash,
+        prevoutInline ? 3 : 2,
+      ]);
       for (const tx of block.tx ?? []) {
+        const vins = await this.resolveVins(tx, prevoutInline);
+        const isFrom = vins.some((v) => v.address && watch.has(v.address));
+
+        // 수신: 대상 주소로 온 vout (change 포함 — 별도 검토). vout 인덱스로 tx_index.
         for (const vout of tx.vout ?? []) {
-          const spk = vout.scriptPubKey ?? {};
-          const outAddrs: string[] = spk.address
-            ? [spk.address]
-            : (spk.addresses ?? []);
-          const hit = outAddrs.find((a) => watch.has(a));
+          const hit = this.outAddrs(vout.scriptPubKey).find((a) =>
+            watch.has(a),
+          );
           if (hit && Number(vout.value) > 0) {
-            // vout.value 는 BTC 소수 → satoshi(10^8) 정수로 맞춰 raw 최소단위 통일(rawDecimal=8).
-            // vout 수신자 = toAddress. 보낸 주소(fromAddress)는 prevout 추적 필요(TODO) → 생략.
             txs.push({
               txHash: tx.txid,
               toAddress: hit,
-              amount: new BigNumber(vout.value).shiftedBy(8).toFixed(0),
+              amount: this.toSat(vout.value),
               blockNumber: height,
-              txIndex: vout.n, // vout 인덱스 = tx 내 위치(같은 주소 다중 vout 구분)
+              txIndex: vout.n,
+              status: 1, // 블록 포함 = 유효
               raw: tx,
             });
           }
         }
-        // TODO(RPC): fromAddress(보낸 주소) 는 vin.prevout 추적 또는 watch-only listsinceblock 사용.
+
+        // 출금·수수료: 우리 UTXO 를 vin 으로 소비 → 우리가 fee 를 냄(§14 native fee 행).
+        if (isFrom) {
+          const inSum = vins.reduce(
+            (s, v) => s.plus(v.value || 0),
+            new BigNumber(0),
+          );
+          const outSum = (tx.vout ?? []).reduce(
+            (s: BN, o: any) => s.plus(o.value || 0),
+            new BigNumber(0),
+          );
+          const fee = inSum.minus(outSum); // BTC
+          // 외부(비-watch) 로 나간 금액 = 실제 출금액.
+          const sentOut = (tx.vout ?? [])
+            .filter(
+              (o: any) =>
+                !this.outAddrs(o.scriptPubKey).some((a) => watch.has(a)),
+            )
+            .reduce((s: BN, o: any) => s.plus(o.value || 0), new BigNumber(0));
+          const fromAddr = vins.find(
+            (v) => v.address && watch.has(v.address),
+          )?.address;
+          txs.push({
+            txHash: tx.txid,
+            fromAddress: fromAddr,
+            amount: this.toSat(sentOut),
+            // fee 는 모든 vin 이 해소돼 inSum≥outSum 일 때만(부분 해소 시 음수→생략).
+            feeAmount: fee.gte(0) ? this.toSat(fee) : undefined,
+            status: 1,
+            blockNumber: height,
+            // vout 인덱스(0..n-1)와 겹치지 않게 vout 개수를 fee 행 tx_index 로.
+            txIndex: (tx.vout ?? []).length,
+            raw: tx,
+          });
+        }
       }
     }
     return txs;

@@ -20,7 +20,12 @@ import {
  */
 @Injectable()
 export class BtcService implements AssetService, OnModuleInit {
-  private readonly cfg: UtxoAssetConfig = { symbol: 'btc', path: 'btc' };
+  // Bitcoin Core 25+ 는 getblock verbosity 3(prevout 인라인) 지원 → true.
+  private readonly cfg: UtxoAssetConfig = {
+    symbol: 'btc',
+    path: 'btc',
+    prevoutInline: true,
+  };
   readonly scanIntervalMs = 10000;
   private readonly logger = new Logger('BtcService');
   /** 1회 스캔 블록 수. 노드+maxDepositScanRange 둘 다 있어야 스캔. 없으면 skip. */

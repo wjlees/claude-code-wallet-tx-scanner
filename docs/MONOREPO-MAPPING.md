@@ -124,11 +124,10 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **monorepo TODO**: `scanTransactions` native 스캔을 방향별 필터로(from∈watch=value/status 무관+fee, to∈watch=value>0·status1). fee_amount 는 fee-payer∈watch 일 때만. 실패 tx status=0 기록. 토큰 행엔 fee 안 붙임(native 행이 담당).
     - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 잠정). **대안(보류)**: 한 tx 1행(`amountFrom/amountTo/rawFrom/rawTo`)? 실패 건 때문에 애매 → **2행이 제일 깔끔**으로 결정(목표=최대한 다 감지·기록, 실패/포워딩 tx 도 기록).
 - **fee_amount 나머지 체인**: **TRX 완료**(getTransactionInfo, TriggerSmartContract originate 도 native fee 행). **SOL 완료**(getParsedTransaction meta.fee/err, fee-payer=accountKeys[0]; SPL 전송 fee 도 SOL native 행). **UTXO 는 아래 15**.
-15. **UTXO fee + 출금(vin) 감지 — 설계 결정 필요**. UTXO fee = Σvin − Σvout 인데 (1) 현재 스캐너는 **수신(vout)만** 감지 → **vin측(우리 UTXO 소비=출금) 감지 선행 필요**(fee 는 우리가 보낸 tx 에서만), (2) vin 값은 `crypto_address_unspents`(우리 UTXO 테이블, spent/unspent)에서 조회 — 이게 **DB 라 rule 1(blockchain 은 DB 의존 X)과 충돌**. 어디서 조회할지 결정:
-    - (a) tx-scanner 가 unspents 조회를 제공(getScanAddresses 처럼)해 UTXO 스캔에 콜백 전달 — blockchain 순수 유지.
-    - (b) `CryptoAddressUnspentsRepository`(port) 를 utxo-common/btc/bch 에 주입 — rule 1 완화(입력 데이터 조회는 영속화와 다름).
-    - (c) rule 1 을 read-side 스캔 입력에 한해 완화.
-    - monorepo 는 실제 `crypto_address_unspents` 사용. prototype 은 (a)/(b)/(c) 결정 후 stub 으로 구현.
+15. **UTXO fee + 출금(vin) 감지 (✅ prototype 완료, verbosity 3 방식)**. UTXO fee = Σvin − Σvout. vin prevout(값·주소)는 **`getblock` verbosity 3(Core 25+, `vin.prevout` 인라인)** 로 추가 콜 없이 획득 → vin∈watch 면 출금(우리가 fee 냄) → native fee 행(§14). 미지원 노드는 **vin 마다 `getrawtransaction`** fallback. 설정 플래그 `UtxoAssetConfig.prevoutInline`(btc=true, bch=false — EVM usingBatchRequest 개념). fee 행 tx_index=vout 개수(vout 인덱스와 비충돌).
+    - **prototype 완료**(2026-07-02): utxo-rpc.client 수신(vout)+출금/fee(vin) + verbosity 3/fallback 분기. rule 1 순수(노드 RPC 만).
+    - **monorepo TODO**: 동일하게 vin prevout(verbosity 3 or getrawtransaction) 로 출금·fee. 단 **대규모(BTC)는 `crypto_address_unspents` 로 O(1) 탐지 권장**(아래 개선).
+    - **개선사항 — `crypto_address_unspents` 테이블**: vin (txid:n) 이 우리 것인지 DB O(1) 조회(네트워크 콜↓, 캐치업 폭발 방지) + vin 값도 보관해 fee 계산. **유지**: 입금 감지 시 unspent 추가, 출금 감지 시 spent 표시(스캐너가 forward 유지). **백필**: 새로 생성한 주소는 잔고 0에서 시작이라 불필요하나, **이미 잔고 있는 주소를 추가하면 기존 UTXO 일회성 스캐닝/import 필요**(별도 프로비저닝 엔드포인트).
 - **SOL/SPL from/to·amount 파싱**: getParsedTransaction 의 balance delta(native)·tokenBalance delta(SPL) 로 — 현재 SOL 은 fee/status/signature 까지, amount 미파싱(TODO).
 
 **주의/약속:**

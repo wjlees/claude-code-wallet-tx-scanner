@@ -10,6 +10,12 @@ export interface UtxoAssetConfig {
   symbol: string;
   /** ParamStore path (노드URL·maxDepositScanRange 조회, 예: 'btc' / 'bch') */
   path: string;
+  /**
+   * 노드가 `getblock` verbosity 3(vin prevout 인라인)을 지원하는지.
+   * true=한 번의 블록 조회로 vin 값·주소까지(추가 콜 0). false=vin 마다 getrawtransaction(fallback).
+   * (Bitcoin Core 25+ = true. BCH/XEC 등 미지원 노드 = false. EVM usingBatchRequest 와 같은 개념.)
+   */
+  prevoutInline: boolean;
 }
 
 /**
@@ -67,7 +73,7 @@ export class UtxoCommonService {
       return { txs: [], nextCursor: String(safeHead) };
     }
     const to = Math.min(from + maxDepositScanRange - 1, safeHead);
-    const txs = await client.scanRange(from, to, addresses);
+    const txs = await client.scanRange(from, to, addresses, cfg.prevoutInline);
     this.logger.log(
       `[${cfg.symbol}] scanned blocks ${from}~${to} (UTXO, safeHead=${safeHead}) → ${txs.length} tx`,
     );
