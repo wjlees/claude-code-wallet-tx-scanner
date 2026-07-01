@@ -124,7 +124,8 @@ export class XplaService implements AssetService, OnModuleInit {
               fromAddress: sender,
               toAddress: recipient,
               amount: amounts[i],
-              feeAmount, // tx 단위 수수료(native axpla)
+              // fee-payer=보낸쪽(sender)이 우리일 때만 기록(§14). (tx 단위 수수료, native axpla)
+              feeAmount: sender && watch.has(sender) ? feeAmount : undefined,
               memoId: memo,
               blockNumber: n,
               txIndex: i, // tx 내 transfer 이벤트 순번

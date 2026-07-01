@@ -41,6 +41,8 @@ export interface DetectedTx {
   amount?: string;
   /** 수수료 (문자열, **원본 최소단위 raw**, 있으면). EVM=gasUsed×effectiveGasPrice. 저장 시 사토시 환산. */
   feeAmount?: string;
+  /** tx 성공 여부 (1=성공, 0=실패). 미설정이면 성공(1) 취급. 실패 tx 도 fee 소모 시 기록(§14). */
+  status?: number;
   /** 입금 식별용 memoId/DestinationTag 등 */
   memoId?: string;
   /** 블록번호 / ledger index 등 (있으면) */

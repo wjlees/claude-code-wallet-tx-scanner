@@ -146,41 +146,53 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     for (let n = from; n <= to; n++) blockNumbers.push(n);
     const blocks = await this.getBlocks(blockNumbers);
 
-    // 2) from/to 매칭 + value>0(0금액/피싱 제외) 후보 수집. (blockNumber 는 요청값으로)
-    const candidates: { tx: any; blockNumber: number }[] = [];
+    // 2) 후보 수집 (§14 fee 모델 — 방향별 필터):
+    //  - from∈watch(우리가 originate=가스 소모): value·status 무관 수집(fee 행 목적).
+    //    ERC20/컨트랙트 호출(value=0)·실패 tx 도 여기서 잡혀 native fee 행이 된다.
+    //  - to∈watch & from∉watch(수신): value>0 인 것만(0금액 피싱 스팸 제외).
+    const candidates: { tx: any; blockNumber: number; isFrom: boolean }[] = [];
     blockNumbers.forEach((bn, i) => {
       const block = blocks[i];
       if (!block) return;
       for (const tx of block.transactions ?? []) {
         if (typeof tx === 'string') continue;
         const value = tx.value != null ? BigInt(tx.value) : 0n;
-        if (value <= 0n) continue;
         const fromA = tx.from ? String(tx.from).toLowerCase() : undefined;
         const toA = tx.to ? String(tx.to).toLowerCase() : undefined;
-        if ((fromA && watch.has(fromA)) || (toA && watch.has(toA))) {
-          candidates.push({ tx, blockNumber: bn });
-        }
+        const isFrom = !!fromA && watch.has(fromA);
+        const isTo = !!toA && watch.has(toA);
+        if (!isFrom && !isTo) continue;
+        if (!isFrom && value <= 0n) continue; // 수신인데 0금액 → skip
+        candidates.push({ tx, blockNumber: bn, isFrom });
       }
     });
 
-    // 3) 후보 tx 만 receipt fetch → status===1(성공)만 채택.
+    // 3) receipt 로 status·gas 확인.
+    //  - originator(isFrom): 성공/실패 모두 기록(fee 소모). amount=성공 시 value, 실패 시 0.
+    //    fee=gasUsed×gasPrice (우리가 낸 것). → native fee 행.
+    //  - 수신(!isFrom): 성공(status===1)만. fee 없음(보낸 쪽이 냄).
     const receipts = await this.getReceipts(candidates.map((c) => c.tx.hash));
     const txs: DetectedTx[] = [];
     candidates.forEach((c, i) => {
       const receipt = receipts[i];
-      if (!receipt || BigInt(receipt.status ?? 0) !== 1n) return; // 실패 tx 제외
-      // 수수료(raw wei) = gasUsed × effectiveGasPrice(없으면 tx.gasPrice). 정수라 BigInt.
+      if (!receipt) return;
+      const status = BigInt(receipt.status ?? 0) === 1n ? 1 : 0;
+      if (!c.isFrom && status !== 1) return; // 실패한 수신은 무의미 → skip
+      const value = c.tx.value != null ? BigInt(c.tx.value) : 0n;
+      // 수수료(raw wei) = gasUsed × effectiveGasPrice(없으면 tx.gasPrice). originator 만.
       const gasPrice = receipt.effectiveGasPrice ?? c.tx.gasPrice;
       const feeAmount =
-        receipt.gasUsed != null && gasPrice != null
+        c.isFrom && receipt.gasUsed != null && gasPrice != null
           ? (BigInt(receipt.gasUsed) * BigInt(gasPrice)).toString()
           : undefined;
       txs.push({
         txHash: String(c.tx.hash),
         fromAddress: c.tx.from ? String(c.tx.from).toLowerCase() : undefined,
         toAddress: c.tx.to ? String(c.tx.to).toLowerCase() : undefined,
-        amount: BigInt(c.tx.value).toString(),
+        // 실패 tx 는 값이 안 움직였으니 amount=0(fee 만 소모). 성공이면 value.
+        amount: (status === 1 ? value : 0n).toString(),
         feeAmount,
+        status,
         blockNumber: c.blockNumber,
         txIndex: 0, // 네이티브 전송은 tx 자체가 1건 → 위치 0
         raw: c.tx,

@@ -81,6 +81,7 @@ export class XlmService implements AssetService, OnModuleInit {
     }
 
     const limit = this.state.maxDepositScanRange!;
+    const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
     let nextCursor: string | null = cursor;
 
@@ -104,8 +105,10 @@ export class XlmService implements AssetService, OnModuleInit {
           txHash: record.hash,
           fromAddress,
           toAddress: fromAddress === address ? undefined : address,
-          // 수수료: fee_charged(stroops, native XLM). rawDecimal 은 XLM(7) 로 tx-scanner 가 환산.
-          feeAmount: (record as any).fee_charged,
+          // 수수료: fee_charged(stroops). fee-payer=source_account 가 우리일 때만(§14).
+          feeAmount: watch.has(fromAddress)
+            ? (record as any).fee_charged
+            : undefined,
           memoId: (record as any).memo,
           blockNumber: (record as any).ledger,
           raw: record,

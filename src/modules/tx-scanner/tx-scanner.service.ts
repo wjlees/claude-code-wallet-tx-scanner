@@ -179,7 +179,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
           : undefined,
       rawFeeAmount: tx.feeAmount,
       note: tx.memoId,
-      status: 0,
+      status: tx.status ?? 1, // 체인 성공여부(1 성공/0 실패). 미설정이면 성공.
     };
   }
 

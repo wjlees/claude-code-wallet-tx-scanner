@@ -115,13 +115,15 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **prototype 완료**(2026-07-01): `crypto-util.ts`, ParamStore `getRawDecimal`, `AssetService.getRawDecimal()`, `TokenRow.rawDecimal`, `DetectedTx.feeAmount`, `InsertParams.{rawAmount, feeAmount, rawFeeAmount}`. `bignumber.js` 의존성.
     - **monorepo TODO**: `detected_transactions` 에 `raw_amount`·`raw_fee_amount` 컬럼 + `scanTransactions` 저장 시 `amount`/`fee_amount`=toSatoshi(raw). **fee 는 base 자산 scale**. 큰 수 BigNumber.
 
-**⏳ 다음 sync 작업:**
-14. **fee 모델 = "native 자산 별도 행"** (설계 확정 필요, 그 후 구현). 수수료는 항상 native 코인이라 **토큰 행엔 fee 를 넣지 않고, 별도 native(코인) 행**(amount=0, fee_amount=gas)으로 기록. 한 tx_id 가 여러 asset_id 행을 가짐(예: ERC20 전송 → AAA 행(토큰금액,fee null) + ETH 행(amount 0, fee gas)). 유니크 키 `(asset_id, tx_id, tx_index)` 로 공존.
-    - **native 스캔 방향별 필터**: `tx.from∈watch`(우리가 originate=fee 소모)면 **value·status 무관 기록**(fee 행), `to∈watch`(수신)이면 value>0 & status===1 만.
-    - **실패 tx**: from∈watch 면 status=0 로 기록(fee 는 소모됨). 실패 token tx 는 로그 없어 getLogs 엔 안 잡히지만 native 스캔의 from∈watch 로 fee 행 생성.
-    - 장점: fee 가 native 행이라 base-coin decimal 배선 불필요(ETH rawDecimal 로 환산). 토큰 fee 별도 처리 불요.
-    - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 기준 잠정), 실패 tx 처리 범위.
-- **fee_amount 나머지 체인**(위 모델 확정 후): TRX(getTransactionInfo)·UTXO(`crypto_address_unspents` 로 vin 값)·SOL/SPL(parsed meta.fee). 각 체인 fee-payer 판정 + native 행.
+14. **fee 모델 = "native 자산 별도 행" (✅ 확정, prototype EVM+XRP/XLM/XPLA 완료, monorepo TODO)**. 수수료는 항상 native 코인이라 **토큰 행엔 fee 안 넣고, 별도 native(코인) 행**(amount=0, fee_amount=gas)으로 기록. 한 tx_id 가 여러 asset_id 행(예: ERC20 전송 → AAA 행(토큰금액,fee null) + ETH 행(amount 0, fee gas)). 유니크 키 `(asset_id, tx_id, tx_index)` 로 공존.
+    - **native 스캔 방향별 필터**: `tx.from∈watch`(우리가 originate=fee 소모)면 **value·status 무관 기록**(fee 행; amount=성공 시 value, 실패 시 0), `to∈watch & from∉watch`(수신)이면 value>0 & status===1 만.
+    - **실패 tx**: from∈watch 면 `status=0` 로 기록(fee 소모). 실패 token tx 는 로그 없어 getLogs 엔 안 잡히지만 native 스캔의 from∈watch 로 fee 행 생성. `DetectedTx.status`(1/0) 추가, `InsertParams.status`=체인 성공여부.
+    - **fee_amount 는 fee-payer∈watch 일 때만**(우리가 낸 것). EVM=tx.from, XRP=tx.Account, XLM=source_account, XPLA=sender(근사).
+    - 장점: fee 가 native 행이라 base-coin decimal 배선 불필요. 토큰 fee 별도 처리 불요.
+    - **prototype 완료**(2026-07-01): ethereum-common(방향별 필터+status+fee 조건부), XRP/XLM/XPLA fee 조건부. `DetectedTx.status`.
+    - **monorepo TODO**: `scanTransactions` native 스캔을 방향별 필터로(from∈watch=value/status 무관+fee, to∈watch=value>0·status1). fee_amount 는 fee-payer∈watch 일 때만. 실패 tx status=0 기록. 토큰 행엔 fee 안 붙임(native 행이 담당).
+    - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 잠정). **대안(보류)**: 한 tx 1행(`amountFrom/amountTo/rawFrom/rawTo`)? 실패 건 때문에 애매 → **2행이 제일 깔끔**으로 결정(목표=최대한 다 감지·기록, 실패/포워딩 tx 도 기록).
+- **fee_amount 나머지 체인**(추가 fetch/parse 필요): TRX(getTransactionInfo)·UTXO(`crypto_address_unspents` 로 vin 값)·SOL/SPL(parsed meta.fee). 각 체인 fee-payer 판정 + native 행.
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

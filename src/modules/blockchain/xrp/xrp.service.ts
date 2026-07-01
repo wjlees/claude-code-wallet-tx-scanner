@@ -85,6 +85,7 @@ export class XrpService implements AssetService, OnModuleInit {
     let maxLedger = cursor === null ? head : Number(cursor);
 
     const limit = this.state.maxDepositScanRange!;
+    const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
     for (const address of addresses) {
       const entries = await client.accountTx(address, from, limit);
@@ -108,8 +109,11 @@ export class XrpService implements AssetService, OnModuleInit {
           fromAddress: tx.Account,
           toAddress: tx.Destination,
           amount,
-          // 수수료: tx.Fee(drops, native XRP). rawDecimal 은 XRP(6) 로 tx-scanner 가 환산.
-          feeAmount: typeof tx.Fee === 'string' ? tx.Fee : undefined,
+          // 수수료: tx.Fee(drops). fee-payer=tx.Account 가 우리(watch)일 때만(우리가 낸 fee, §14).
+          feeAmount:
+            watch.has(tx.Account) && typeof tx.Fee === 'string'
+              ? tx.Fee
+              : undefined,
           memoId:
             tx.DestinationTag !== undefined
               ? String(tx.DestinationTag)
