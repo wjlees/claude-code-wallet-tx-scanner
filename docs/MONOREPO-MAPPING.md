@@ -19,8 +19,8 @@
 | 자산 식별 | `constants.AssetId.X` (값 임의) | `@gopax/proto` `IsoAlpha3ToAssetId.ISO_ALPHA3_X` | 심볼 정합만(값 무관) |
 | 토큰타입 식별 | `constants.TokenTypeId.X` (값 임의) | `@gopax/proto` `TokenTypeId` (KIP7=11,KONETTOKEN=20,BASETOKEN=21,SPL=9,TRC20=17) | 심볼 정합만 |
 | 저장 assetId 해석 | 코인=`assetId`. 토큰=token_type 루프가 tx 의 `contractAddress→asset_id`(main.token) 로 분류해 각 토큰 asset_id 로 저장(`saveDetectedTokens`). 토큰 목록은 `TokenRepository`(main.token stub)에서 `token_type → [{assetId, contractAddress}]` | `assetRepository`/`tokenRepository`(main.token) 로 `token_type_id → (asset_id, contractAddress)` 조회 후 tx 의 contractAddress 로 분류 | ✅ 모델 일치(토큰이 자기 asset id, per-tx contractAddress 분류). prototype 은 토큰 목록 stub, monorepo 는 실제 main.token. §5-6/§5-10 참조 |
-| DetectedTx | `{ txHash, fromAddress?, toAddress?, contractAddress?, txIndex?, amount?, memoId?, blockNumber?, raw }` — **in/out 의미부여 안 함**(from/to 만). `txIndex`=tx 내 위치(멱등 키용) | 동일 컨셉 | ✅ 일치. in/out 해석은 저장/조회 단계 |
-| tx 저장 | `TxScannerService.saveDetected` → `DetectedTransactionsRepository.insertDetectedTransactions`(stub). **매퍼/TxRepository 없음**(DetectedTx≈DB 컬럼이라 직접 매핑) | 동명 repository (`main.detected_transactions`) | ✅ InsertParams(fromAddress/toAddress/txId/txIndex/amount/note…) 정렬 |
+| DetectedTx | `{ txHash, fromAddress?, toAddress?, contractAddress?, txIndex?, amount?(raw), feeAmount?(raw), memoId?, blockNumber?, raw }` — **in/out 의미부여 안 함**. blockchain 은 **raw 최소단위** 반환 | 동일 컨셉 | ✅ 일치. 사토시 환산은 저장 단계 |
+| tx 저장 | `saveDetected`/`saveDetectedTokens` → `toInsertParams`(raw→**사토시** 환산, `raw_amount` 보존) → `insertDetectedTransactions`(stub) | 동명 repository (`main.detected_transactions`) | ✅ InsertParams(…/`amount`=사토시/`rawAmount`/`feeAmount`=사토시) 정렬. §5-13 |
 | 멱등 | 유니크 키 `(asset_id, tx_id, tx_index)`. stub 은 Set dedup | UNIQUE `(asset_id, tx_id, tx_index)` + TypeORM `.orIgnore()`(MySQL) | ✅ 양쪽 완료(§5-7). 중복 무시 표기만 엔진차(아래 주의) |
 | 스캔 대상(러너) 빌드 | `TxScannerService.onModuleInit` 의 `createAssetRunner`/`createTokenRunner`(인라인). 토큰은 `TokenRepository.getTokensByType` 로 펼침 | **`ScanTargetService`** (`buildTokenScanRunnerConfig`/`getTokenScanTargets` — token_type→main.token 펼침), `TxScannerService` 는 결과로 러너만 생성 | ✅ §6+§10 양쪽 적용 완료(구조는 prototype 인라인 ↔ monorepo 별도 클래스 — 책임 동일) |
 | 워치독 | `TxScannerService.watchdog()` — **`@Cron` 아님**, `setInterval` 로 주기 호출 | `scheduler_manager` 가 watchdog 등록·주기 호출(@Cron 아님) | ✅ 둘 다 @Cron 미사용 |
@@ -107,8 +107,14 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, XRP Amount(string drops), XPLA amount). SOL/SPL 은 transfer 파싱 후(현재 signature-only).
     - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, 전 비-EVM). monorepo 발산: TRC20 은 range=tron path·confirmationThreshold=trc20 path. UTXO 금액은 bitcoind `vout.value`(BTC 소수 문자열) 그대로 — satoshi 환산 아직(§13).
 
+13. **amount 사토시 통일 + fee_amount 파싱 — prototype 완료, monorepo TODO**. **DB `amount` = 사토시(8자리 정수)**: `toSatoshi(raw, rawDecimal)` = `BigNumber(raw).shiftedBy(8-rawDecimal).floor` (8자리 미만 버림). 원본은 **`raw_amount` 컬럼**에 보존(환산 lossy). **`fee_amount`도 사토시**(EVM=gasUsed×effectiveGasPrice(raw wei)→환산).
+    - **rawDecimal 소스**: 코인=ParamStore `rawDecimal`(EVM 18/BTC·BCH 8/SOL 9/XLM 7/XRP·TRX·XPLA 6) — `AssetService.getRawDecimal()` 로 노출. 토큰=`main.token.token_decimal`. 환산은 **tx-scanner**(`toInsertParams`)에서: 코인=`service.getRawDecimal()`, 토큰=contract→rawDecimal 맵.
+    - blockchain 은 **raw 최소단위 정수** 반환(UTXO 는 `vout.value`(BTC소수)→satoshi 정수로 맞춤). EVM 네이티브는 `feeAmount`(raw wei) 채움.
+    - **prototype 완료**(2026-07-01): `blockchain/amount.ts` `toSatoshi`, ParamStore `getRawDecimal`, `AssetService.getRawDecimal()`(전 코인), `TokenRow.rawDecimal`, `DetectedTx.feeAmount`, `InsertParams.{rawAmount, feeAmount}`. `bignumber.js` 의존성 추가.
+    - **monorepo TODO**: `detected_transactions` 에 `raw_amount` 컬럼 추가 + `scanTransactions` 저장 시 `amount`=toSatoshi(raw, rawDecimal)·`raw_amount`=raw·`fee_amount`=toSatoshi(feeRaw). rawDecimal 소스는 ParamStore(코인)/main.token.token_decimal(토큰). 큰 수는 BigNumber.
+
 **⏳ 다음 sync 작업:**
-13. **amount 사토시 통일 + fee_amount 파싱** (양쪽 미구현). 현재 `amount` 는 체인별 raw 단위(EVM wei, XRP drops, TRX sun, UTXO=BTC소수, 토큰=tokenDecimal) 그대로 저장 → **혼재**. **DB `amount` 는 사토시(8자리 정수)로 통일**: 자산 decimals 기준 8자리 환산 + 8자리 미만 버림(`BigNumber`). 예: wei(18)→`floor(wei/10^10)`, XRP drops(6)→`drops*10^2`, BTC소수→`*10^8`, 토큰→`raw*10^(8-tokenDecimal)`. 환산은 저장 단계(tx-scanner)에서 자산 메타(decimals)로(blockchain 은 raw 반환). 원본 보존용 `raw_amount` 컬럼 추가 권장(사토시 환산은 lossy). **`fee_amount` 도 현재 null → 체인별 수수료 파싱**(EVM=gasUsed×effectiveGasPrice(receipt) 등)해 사토시로. decimals 소스: 코인=자산 config(체인별 상수), 토큰=`main.token.tokenDecimal`. **양쪽 합의 후 구현.**
+- **fee_amount 비-EVM 확장**: 현재 EVM 네이티브만 fee 파싱. TRX(bandwidth/energy)·XRP(`tx.Fee`)·XLM(`fee_charged`)·XPLA(gas)·UTXO(vin−vout) 등 체인별 수수료는 후속(양쪽).
 
 **주의/약속:**
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.

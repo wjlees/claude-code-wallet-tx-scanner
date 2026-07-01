@@ -4,7 +4,11 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+  getRawDecimal,
+} from '../parameter-store';
 
 const SOL_PATH = 'sol';
 
@@ -14,6 +18,8 @@ interface SolState {
   connection?: Connection;
   /** page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** 원본 최소단위 자릿수(lamports=9). 사토시 환산용. */
+  rawDecimal?: number;
 }
 
 /**
@@ -36,6 +42,10 @@ export class SolService implements AssetService, OnModuleInit {
     return AssetId.SOL;
   }
 
+  getRawDecimal(): number {
+    return this.state.rawDecimal ?? 8;
+  }
+
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
     if (!url) {
@@ -49,6 +59,7 @@ export class SolService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.rawDecimal = await getRawDecimal(SOL_PATH);
     // 'finalized' = SOL 의 확정(reorg 안전) 지점 — EVM confirmationThreshold cap 에 대응.
     this.state.connection = new Connection(url, 'finalized');
     this.logger.log(`connection initialized (maxDepositScanRange=${range})`);

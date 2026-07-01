@@ -15,6 +15,8 @@ export interface TokenRow {
   tokenTypeId: number;
   /** 토큰 컨트랙트/mint 주소 (transfer 필터 기준) */
   contractAddress: string;
+  /** 토큰 원본 최소단위 자릿수 (main.token.token_decimal). 사토시 환산용. */
+  rawDecimal: number;
   /** 로깅용 심볼 */
   symbol: string;
 }
@@ -48,36 +50,42 @@ export class StubTokenRepository implements TokenRepository {
       assetId: 1001,
       tokenTypeId: TokenTypeId.KIP7,
       contractAddress: '0x1000000000000000000000000000000000000001',
+      rawDecimal: 18,
       symbol: 'kip7-A',
     },
     {
       assetId: 1002,
       tokenTypeId: TokenTypeId.KONETTOKEN,
       contractAddress: '0x2000000000000000000000000000000000000002',
+      rawDecimal: 18,
       symbol: 'konetToken-A',
     },
     {
       assetId: 1003,
       tokenTypeId: TokenTypeId.KONETTOKEN,
       contractAddress: '0x3000000000000000000000000000000000000003',
+      rawDecimal: 6,
       symbol: 'konetToken-B',
     },
     {
       assetId: 1004,
       tokenTypeId: TokenTypeId.BASETOKEN,
       contractAddress: '0x4000000000000000000000000000000000000004',
+      rawDecimal: 18,
       symbol: 'baseToken-A',
     },
     {
       assetId: 1005,
       tokenTypeId: TokenTypeId.SPL,
       contractAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      rawDecimal: 6,
       symbol: 'spl-A',
     },
     {
       assetId: 1006,
       tokenTypeId: TokenTypeId.TRC20,
       contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      rawDecimal: 6,
       symbol: 'trc20-A',
     },
   ];

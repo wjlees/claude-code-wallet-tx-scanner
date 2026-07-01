@@ -8,6 +8,7 @@ import {
   getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
+  getRawDecimal,
 } from '../parameter-store';
 
 const TRON_PATH = 'tron'; // path 는 tron (symbol 은 trx)
@@ -20,6 +21,8 @@ interface TrxState {
   maxDepositScanRange?: number;
   /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). 미설정 0. */
   confirmationThreshold?: number;
+  /** 원본 최소단위 자릿수(sun=6). 사토시 환산용. */
+  rawDecimal?: number;
 }
 
 /**
@@ -42,6 +45,10 @@ export class TrxService implements AssetService, OnModuleInit {
     return AssetId.TRX;
   }
 
+  getRawDecimal(): number {
+    return this.state.rawDecimal ?? 8;
+  }
+
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
     if (!url) {
@@ -57,6 +64,7 @@ export class TrxService implements AssetService, OnModuleInit {
     this.state.maxDepositScanRange = range;
     this.state.confirmationThreshold =
       await getConfirmationThreshold(TRON_PATH);
+    this.state.rawDecimal = await getRawDecimal(TRON_PATH);
     this.state.tronWeb = new TronWeb({ fullHost: url });
     this.logger.log(`tronWeb initialized (maxDepositScanRange=${range})`);
   }

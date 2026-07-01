@@ -10,9 +10,11 @@ import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
 import { WalletService } from '../wallet/wallet.service';
+import { toSatoshi } from '../blockchain/amount';
 import {
   DETECTED_TRANSACTIONS_REPOSITORY,
   DetectedTransactionsRepository,
+  InsertDetectedTransactionParams,
 } from './detected-transactions.repository';
 import {
   WALLET_SCANNER_ASSET_REPOSITORY,
@@ -99,13 +101,14 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   /** 코인 러너: 자산 1개. 저장/진행지점 키 = 코인 assetId. */
   private createAssetRunner(service: AssetService): ScanRunner {
     const assetId = service.getAssetId();
+    const rawDecimal = service.getRawDecimal();
     const target: ScanTarget = { assetId };
     return new ScanRunner(
       target,
       service,
       [], // 코인은 컨트랙트 목록 없음
       () => this.wallets.getScanAddresses(target),
-      (txs) => this.saveDetected(assetId, txs),
+      (txs) => this.saveDetected(assetId, rawDecimal, txs),
       () => this.scannerAssetRepository.getStartBlockNumber(assetId),
       (sbn) => this.scannerAssetRepository.updateStartBlockNumber(assetId, sbn),
       this.logger,
@@ -122,8 +125,12 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   ): ScanRunner {
     const target: ScanTarget = { tokenTypeId: service.getTokenTypeId() };
     const contractAddresses = tokens.map((t) => t.contractAddress);
-    const assetIdByContract = new Map(
-      tokens.map((t) => [t.contractAddress, t.assetId]),
+    // contractAddress → { assetId, rawDecimal }. (토큰 decimals = main.token.token_decimal)
+    const infoByContract = new Map(
+      tokens.map((t) => [
+        t.contractAddress,
+        { assetId: t.assetId, rawDecimal: t.rawDecimal },
+      ]),
     );
     const assetIds = tokens.map((t) => t.assetId);
     return new ScanRunner(
@@ -131,7 +138,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
       service,
       contractAddresses,
       () => this.wallets.getScanAddresses(target),
-      (txs) => this.saveDetectedTokens(assetIdByContract, txs),
+      (txs) => this.saveDetectedTokens(infoByContract, txs),
       // 같은 타입의 토큰 행은 값이 같으므로 대표(첫 토큰) 행에서 로드.
       () => this.scannerAssetRepository.getStartBlockNumber(assetIds[0]),
       // 이 타입의 모든 토큰 행을 같은 값으로 갱신.
@@ -144,54 +151,64 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** 코인 DetectedTx 저장(매퍼 없이 거의 1:1, amount 만 NOT NULL 기본값). */
+  /**
+   * DetectedTx → InsertParams. amount/feeAmount(raw)를 rawDecimal 로 **사토시(8자리)** 환산하고,
+   * 원본은 rawAmount 로 보존. amount 없으면 '0'.
+   */
+  private toInsertParams(
+    assetId: number,
+    rawDecimal: number,
+    tx: DetectedTx,
+  ): InsertDetectedTransactionParams {
+    return {
+      assetId,
+      fromAddress: tx.fromAddress,
+      toAddress: tx.toAddress,
+      txId: tx.txHash,
+      txIndex: tx.txIndex ?? 0,
+      blockNumber: tx.blockNumber,
+      amount: tx.amount != null ? toSatoshi(tx.amount, rawDecimal) : '0',
+      rawAmount: tx.amount,
+      feeAmount:
+        tx.feeAmount != null ? toSatoshi(tx.feeAmount, rawDecimal) : undefined,
+      note: tx.memoId,
+      status: 0,
+    };
+  }
+
+  /** 코인 DetectedTx 저장. amount 는 코인 rawDecimal 로 사토시 환산. */
   private async saveDetected(
     assetId: number,
+    rawDecimal: number,
     txs: DetectedTx[],
   ): Promise<void> {
     for (const tx of txs) {
-      await this.detectedRepository.insertDetectedTransactions({
-        assetId,
-        fromAddress: tx.fromAddress,
-        toAddress: tx.toAddress,
-        txId: tx.txHash,
-        txIndex: tx.txIndex ?? 0,
-        blockNumber: tx.blockNumber,
-        amount: tx.amount ?? '0',
-        note: tx.memoId,
-        status: 0,
-      });
+      await this.detectedRepository.insertDetectedTransactions(
+        this.toInsertParams(assetId, rawDecimal, tx),
+      );
     }
   }
 
   /**
-   * 토큰 DetectedTx 저장: 각 tx 의 `contractAddress` 로 어느 토큰인지 분류해
-   * 그 토큰의 asset_id 로 insert 한다(한 token_type 루프가 여러 토큰을 처리).
+   * 토큰 DetectedTx 저장: 각 tx 의 `contractAddress` 로 어느 토큰(assetId·rawDecimal)인지 분류해
+   * 그 토큰 rawDecimal 로 사토시 환산 후 그 asset_id 로 insert(한 token_type 루프가 여러 토큰 처리).
    */
   private async saveDetectedTokens(
-    assetIdByContract: Map<string, number>,
+    infoByContract: Map<string, { assetId: number; rawDecimal: number }>,
     txs: DetectedTx[],
   ): Promise<void> {
     for (const tx of txs) {
       // 정확 매칭 우선, 실패 시 lowercase fallback(EVM 체크섬 대응; SPL/TRC20 base58 은 정확 매칭에서 끝남).
-      const assetId = tx.contractAddress
-        ? (assetIdByContract.get(tx.contractAddress) ??
-          assetIdByContract.get(tx.contractAddress.toLowerCase()))
+      const info = tx.contractAddress
+        ? (infoByContract.get(tx.contractAddress) ??
+          infoByContract.get(tx.contractAddress.toLowerCase()))
         : undefined;
-      if (assetId === undefined) {
+      if (info === undefined) {
         continue; // 추적 대상 토큰이 아니면 skip
       }
-      await this.detectedRepository.insertDetectedTransactions({
-        assetId,
-        fromAddress: tx.fromAddress,
-        toAddress: tx.toAddress,
-        txId: tx.txHash,
-        txIndex: tx.txIndex ?? 0,
-        blockNumber: tx.blockNumber,
-        amount: tx.amount ?? '0',
-        note: tx.memoId,
-        status: 0,
-      });
+      await this.detectedRepository.insertDetectedTransactions(
+        this.toInsertParams(info.assetId, info.rawDecimal, tx),
+      );
     }
   }
 

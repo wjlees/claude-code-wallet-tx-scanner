@@ -7,11 +7,15 @@ import {
   getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
+  getRawDecimal,
 } from '../parameter-store';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
 } from './ethereum-based-assets';
+
+/** 코인 native 자산 자릿수 기본값(설정 조회 전). */
+const DEFAULT_RAW_DECIMAL = 8;
 
 /** 한 JSON-RPC batch 페이로드에 담는 최대 요청 수. */
 const BATCH_CHUNK = 100;
@@ -37,6 +41,8 @@ interface EthereumCommonState {
   maxDepositScanRange?: number;
   /** 스캔 안전 마진: 스캔 끝을 head-confirmationThreshold 로 캡(reorg 제외). 미설정 0. */
   confirmationThreshold?: number;
+  /** 원본 최소단위 자릿수(EVM=18). tx-scanner 사토시 환산용. */
+  rawDecimal: number;
 }
 
 /**
@@ -56,7 +62,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
 
   constructor(private readonly assetId: number) {
     const config = ethereumBasedAssets[assetId];
-    this.state = { config };
+    this.state = { config, rawDecimal: DEFAULT_RAW_DECIMAL };
     this.logger = new Logger(`EthereumCommonService:${config.assetName}`);
   }
 
@@ -78,6 +84,7 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     this.state.confirmationThreshold = await getConfirmationThreshold(
       this.state.config.path,
     );
+    this.state.rawDecimal = await getRawDecimal(this.state.config.path);
     this.state.nodeUrl = url;
     this.state.web3 = new Web3(url);
     this.logger.log(
@@ -92,6 +99,10 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
 
   getAssetId(): number {
     return this.assetId;
+  }
+
+  getRawDecimal(): number {
+    return this.state.rawDecimal;
   }
 
   get symbol(): string {
@@ -158,11 +169,18 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     candidates.forEach((c, i) => {
       const receipt = receipts[i];
       if (!receipt || BigInt(receipt.status ?? 0) !== 1n) return; // 실패 tx 제외
+      // 수수료(raw wei) = gasUsed × effectiveGasPrice(없으면 tx.gasPrice). 정수라 BigInt.
+      const gasPrice = receipt.effectiveGasPrice ?? c.tx.gasPrice;
+      const feeAmount =
+        receipt.gasUsed != null && gasPrice != null
+          ? (BigInt(receipt.gasUsed) * BigInt(gasPrice)).toString()
+          : undefined;
       txs.push({
         txHash: String(c.tx.hash),
         fromAddress: c.tx.from ? String(c.tx.from).toLowerCase() : undefined,
         toAddress: c.tx.to ? String(c.tx.to).toLowerCase() : undefined,
         amount: BigInt(c.tx.value).toString(),
+        feeAmount,
         blockNumber: c.blockNumber,
         txIndex: 0, // 네이티브 전송은 tx 자체가 1건 → 위치 0
         raw: c.tx,

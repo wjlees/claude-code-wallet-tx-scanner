@@ -13,8 +13,11 @@ export interface InsertDetectedTransactionParams {
   /** tx 내 위치 인덱스 (멱등 유니크 키 `(assetId, txId, txIndex)` 의 3번째). 기본 0. */
   txIndex?: number;
   blockNumber?: number;
-  /** required (decimal 문자열, 최소단위) */
+  /** required — **사토시(8자리 정수) 문자열**. 원본 최소단위는 rawAmount 로 보존. */
   amount: string;
+  /** 원본 최소단위 금액(체인 raw). 사토시 환산이 lossy 라 감사/대조용으로 보존. */
+  rawAmount?: string;
+  /** 수수료 — **사토시(8자리 정수) 문자열**(있으면). */
   feeAmount?: string;
   /** memoId 등 */
   note?: string;

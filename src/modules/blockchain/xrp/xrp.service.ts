@@ -3,7 +3,11 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+  getRawDecimal,
+} from '../parameter-store';
 import { XrpRpcClient } from './xrp-rpc.client';
 
 const XRP_PATH = 'xrp';
@@ -14,6 +18,8 @@ interface XrpState {
   client?: XrpRpcClient;
   /** account_tx page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** 원본 최소단위 자릿수(drops=6). 사토시 환산용. */
+  rawDecimal?: number;
 }
 
 /**
@@ -34,6 +40,10 @@ export class XrpService implements AssetService, OnModuleInit {
     return AssetId.XRP;
   }
 
+  getRawDecimal(): number {
+    return this.state.rawDecimal ?? 8;
+  }
+
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
     if (!url) {
@@ -47,6 +57,7 @@ export class XrpService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.rawDecimal = await getRawDecimal(XRP_PATH);
     this.state.client = new XrpRpcClient(url);
     this.logger.log(
       `rippled client initialized (maxDepositScanRange=${range})`,

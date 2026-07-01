@@ -7,6 +7,7 @@ import {
   getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
+  getRawDecimal,
 } from '../parameter-store';
 import { XplaRestClient } from './xpla-rest.client';
 
@@ -22,6 +23,8 @@ interface XplaState {
   maxDepositScanRange?: number;
   /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). commit 최종이라 보통 0. */
   confirmationThreshold?: number;
+  /** 원본 최소단위 자릿수(axpla=6). 사토시 환산용. */
+  rawDecimal?: number;
 }
 
 /**
@@ -44,6 +47,10 @@ export class XplaService implements AssetService, OnModuleInit {
     return AssetId.XPLA;
   }
 
+  getRawDecimal(): number {
+    return this.state.rawDecimal ?? 8;
+  }
+
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
     if (!url) {
@@ -59,6 +66,7 @@ export class XplaService implements AssetService, OnModuleInit {
     this.state.maxDepositScanRange = range;
     this.state.confirmationThreshold =
       await getConfirmationThreshold(XPLA_PATH);
+    this.state.rawDecimal = await getRawDecimal(XPLA_PATH);
     this.state.client = new XplaRestClient(url);
     this.logger.log(
       `LCD REST client initialized (maxDepositScanRange=${range})`,

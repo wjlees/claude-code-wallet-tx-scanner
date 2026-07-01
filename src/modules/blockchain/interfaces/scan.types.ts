@@ -37,8 +37,10 @@ export interface DetectedTx {
    * (SOL/SPL 은 transfer 파싱 전이라 현재 미설정 → 저장 시 0 취급, signature 단위 dedup.)
    */
   txIndex?: number;
-  /** 금액 (문자열, 최소단위) */
+  /** 금액 (문자열, **원본 최소단위 raw**). 저장 단계에서 사토시로 환산(raw 는 raw_amount 로 보존). */
   amount?: string;
+  /** 수수료 (문자열, **원본 최소단위 raw**, 있으면). EVM=gasUsed×effectiveGasPrice. 저장 시 사토시 환산. */
+  feeAmount?: string;
   /** 입금 식별용 memoId/DestinationTag 등 */
   memoId?: string;
   /** 블록번호 / ledger index 등 (있으면) */

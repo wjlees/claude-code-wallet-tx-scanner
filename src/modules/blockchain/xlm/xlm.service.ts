@@ -4,7 +4,11 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+  getRawDecimal,
+} from '../parameter-store';
 
 const XLM_PATH = 'xlm';
 
@@ -14,6 +18,8 @@ interface XlmState {
   server?: Horizon.Server;
   /** page limit. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** 원본 최소단위 자릿수(stroops=7). 사토시 환산용. */
+  rawDecimal?: number;
 }
 
 /**
@@ -35,6 +41,10 @@ export class XlmService implements AssetService, OnModuleInit {
     return AssetId.XLM;
   }
 
+  getRawDecimal(): number {
+    return this.state.rawDecimal ?? 8;
+  }
+
   async onModuleInit(): Promise<void> {
     const url = await this.resolveNodeUrl();
     if (!url) {
@@ -48,6 +58,7 @@ export class XlmService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.rawDecimal = await getRawDecimal(XLM_PATH);
     this.state.server = new Horizon.Server(url);
     this.logger.log(
       `Horizon server initialized (maxDepositScanRange=${range})`,

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { SATOSHI_DECIMALS } from './amount';
 
 /**
  * 파라미터 저장소 — 현재는 `parameter.json` 파일 기반 stub.
@@ -62,4 +63,15 @@ export async function getConfirmationThreshold(path: string): Promise<number> {
   const raw = (await getParametersByPath(path)).confirmationThreshold;
   const n = raw !== undefined ? parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 체인 원본 최소단위의 자릿수(rawDecimal). 금액을 사토시(8자리)로 환산할 때 쓴다.
+ * 코인은 체인 상수(EVM=18, BTC/BCH=8, SOL=9, XLM=7, XRP/TRX/XPLA=6). 미설정이면 8(=satoshi, 무변환).
+ * (토큰은 이 값 대신 `main.token.token_decimal` 을 쓴다.)
+ */
+export async function getRawDecimal(path: string): Promise<number> {
+  const raw = (await getParametersByPath(path)).rawDecimal;
+  const n = raw !== undefined ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : SATOSHI_DECIMALS;
 }

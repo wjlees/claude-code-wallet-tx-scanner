@@ -5,6 +5,7 @@ import { ScanResult } from '../interfaces/scan.types';
 import {
   getConfirmationThreshold,
   getMaxDepositScanRange,
+  getRawDecimal,
 } from '../parameter-store';
 import {
   UtxoAssetConfig,
@@ -25,6 +26,8 @@ export class BchService implements AssetService, OnModuleInit {
   private maxDepositScanRange?: number;
   /** reorg 안전 마진(스캔 끝 = height-confirmationThreshold). 미설정 0. */
   private confirmationThreshold = 0;
+  /** 원본 최소단위 자릿수(BCH=8, UTXO client 가 satoshi 정수로 반환). */
+  private rawDecimal = 8;
 
   constructor(private readonly utxo: UtxoCommonService) {}
 
@@ -42,6 +45,11 @@ export class BchService implements AssetService, OnModuleInit {
     }
     this.maxDepositScanRange = range;
     this.confirmationThreshold = await getConfirmationThreshold(this.cfg.path);
+    this.rawDecimal = await getRawDecimal(this.cfg.path);
+  }
+
+  getRawDecimal(): number {
+    return this.rawDecimal;
   }
 
   getAssetId(): number {

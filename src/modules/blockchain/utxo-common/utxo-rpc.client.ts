@@ -1,3 +1,4 @@
+import { BigNumber } from 'bignumber.js';
 import { DetectedTx } from '../interfaces/scan.types';
 
 /**
@@ -70,11 +71,12 @@ export class UtxoRpcClient {
             : (spk.addresses ?? []);
           const hit = outAddrs.find((a) => watch.has(a));
           if (hit && Number(vout.value) > 0) {
+            // vout.value 는 BTC 소수 → satoshi(10^8) 정수로 맞춰 raw 최소단위 통일(rawDecimal=8).
             // vout 수신자 = toAddress. 보낸 주소(fromAddress)는 prevout 추적 필요(TODO) → 생략.
             txs.push({
               txHash: tx.txid,
               toAddress: hit,
-              amount: vout.value !== undefined ? String(vout.value) : undefined,
+              amount: new BigNumber(vout.value).shiftedBy(8).toFixed(0),
               blockNumber: height,
               txIndex: vout.n, // vout 인덱스 = tx 내 위치(같은 주소 다중 vout 구분)
               raw: tx,

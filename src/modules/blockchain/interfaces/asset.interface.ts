@@ -12,6 +12,12 @@ export interface AssetService {
   /** 자산 식별 번호 (`AssetId`). 서비스 매핑·식별의 1차 키. */
   getAssetId(): number;
 
+  /**
+   * 이 코인의 원본 최소단위 자릿수(rawDecimal). tx-scanner 가 금액을 사토시(8자리)로 환산할 때 쓴다.
+   * (EVM=18, BTC/BCH=8, SOL=9, XLM=7, XRP/TRX/XPLA=6 — ParamStore `rawDecimal` 에서 읽음)
+   */
+  getRawDecimal(): number;
+
   /** 체인/네트워크를 식별하는 심볼 (로깅용 보조값) */
   readonly symbol: string;
 

@@ -94,4 +94,4 @@
 
 ## 6. 숫자/금액 계산 규칙
 - **소수점·큰 수 계산은 `bignumber.js` 를 `BigNumber` 로 import 해서 쓴다.** "큰 수"가 모호하면 웬만하면 BigNumber 를 기본으로. `Number` 부동소수점 연산 금지(정밀도 손실). 특정 API 가 `BigInt`/특정 타입을 요구할 때만 그 지점에서 변환.
-- **DB 저장 `amount` 는 사토시(satoshi, 8자리 정수) 단위로 통일**한다. 체인별 원본 단위(EVM wei=18, XRP drops=6, TRX sun=6, BTC=BTC소수 등)를 **자산 decimals 기준으로 8자리로 환산하고 8자리 미만은 버림(floor)**. 원본 정밀도 보존이 필요하면 `raw_amount` 컬럼 별도. 환산은 저장 단계(tx-scanner)에서 자산 메타(decimals)로 수행(blockchain 은 raw 반환). **(적용 상태는 매핑 §13 참조 — 진행 시 이 규칙대로.)**
+- **DB 저장 `amount` 는 사토시(satoshi, 8자리 정수) 단위로 통일**한다. `blockchain/amount.ts` 의 **`toSatoshi(raw, rawDecimal)`**(= `BigNumber(raw).shiftedBy(8-rawDecimal).floor`)로 환산(8자리 미만 버림). 원본은 **`raw_amount`** 로 보존(환산 lossy). `fee_amount` 도 사토시. **환산은 tx-scanner(`toInsertParams`)에서** — blockchain 은 raw 최소단위 정수 반환. **rawDecimal 소스**: 코인=ParamStore `rawDecimal`(`AssetService.getRawDecimal()`), 토큰=`main.token.token_decimal`(`TokenRow.rawDecimal`). (매핑 §13, prototype 적용 완료.)
