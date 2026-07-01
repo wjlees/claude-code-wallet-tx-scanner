@@ -107,33 +107,45 @@ export class TrxService implements AssetService, OnModuleInit {
     for (let n = from; n <= to; n++) {
       const block = await tronWeb.trx.getBlock(n);
       for (const tx of (block as any).transactions ?? []) {
-        // status: 컨트랙트 실행 성공만(ret[0].contractRet==='SUCCESS')
-        if (tx.ret?.[0]?.contractRet && tx.ret[0].contractRet !== 'SUCCESS') {
-          continue;
-        }
         const contract = tx.raw_data?.contract?.[0];
-        if (!contract || contract.type !== 'TransferContract') continue;
+        if (!contract) continue;
         const v = contract.parameter?.value ?? {};
-        if (!(Number(v.amount) > 0)) continue; // 0금액 제외
-        const fromAddress = v.owner_address
+        const status = tx.ret?.[0]?.contractRet === 'SUCCESS' ? 1 : 0;
+        const owner = v.owner_address
           ? tronWeb.address.fromHex(v.owner_address)
           : undefined;
-        const toAddress = v.to_address
-          ? tronWeb.address.fromHex(v.to_address)
-          : undefined;
-        if (
-          (fromAddress && watch.has(fromAddress)) ||
-          (toAddress && watch.has(toAddress))
-        ) {
-          txs.push({
-            txHash: tx.txID,
-            fromAddress,
-            toAddress,
-            amount: String(v.amount),
-            blockNumber: n,
-            raw: { txID: tx.txID },
-          });
+        // native TRX 값 이동은 TransferContract 만. 그 외(TriggerSmartContract=TRC20 등)는 native amount=0.
+        const isNative = contract.type === 'TransferContract';
+        const toAddress =
+          isNative && v.to_address
+            ? tronWeb.address.fromHex(v.to_address)
+            : undefined;
+        const value = isNative ? BigInt(v.amount ?? 0) : 0n;
+
+        const isFrom = !!owner && watch.has(owner);
+        const isTo = !!toAddress && watch.has(toAddress);
+        if (!isFrom && !isTo) continue;
+        if (!isFrom && !(value > 0n)) continue; // 수신인데 native 0금액 → skip
+        if (!isFrom && status !== 1) continue; // 실패 수신 무의미
+
+        // §14: 우리가 originate 한 tx(owner∈watch)면 성공/실패·contract type 무관 native fee 행.
+        //   TRC20 전송(TriggerSmartContract)도 여기서 native TRX fee 행이 된다(토큰 행은 trc20 이 별도).
+        //   fee 는 getTransactionInfo 로 조회(추가 호출, sun). 우리가 낸 것만.
+        let feeAmount: string | undefined;
+        if (isFrom) {
+          const info: any = await tronWeb.trx.getTransactionInfo(tx.txID);
+          feeAmount = info?.fee != null ? String(info.fee) : undefined;
         }
+        txs.push({
+          txHash: tx.txID,
+          fromAddress: owner,
+          toAddress,
+          amount: (status === 1 ? value : 0n).toString(),
+          feeAmount,
+          status,
+          blockNumber: n,
+          raw: { txID: tx.txID },
+        });
       }
     }
 
