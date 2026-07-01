@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { SATOSHI_DECIMALS } from './amount';
+import { SATOSHI_DECIMALS } from './crypto-util';
 
 /**
  * 파라미터 저장소 — 현재는 `parameter.json` 파일 기반 stub.

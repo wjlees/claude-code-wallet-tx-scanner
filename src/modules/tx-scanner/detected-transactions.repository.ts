@@ -17,8 +17,10 @@ export interface InsertDetectedTransactionParams {
   amount: string;
   /** 원본 최소단위 금액(체인 raw). 사토시 환산이 lossy 라 감사/대조용으로 보존. */
   rawAmount?: string;
-  /** 수수료 — **사토시(8자리 정수) 문자열**(있으면). */
+  /** 수수료 — **사토시(8자리 정수) 문자열**(있으면). 수수료는 항상 native(base) 자산이라 base scale 기준. */
   feeAmount?: string;
+  /** 원본 최소단위 수수료(native raw). 감사/대조용 보존. */
+  rawFeeAmount?: string;
   /** memoId 등 */
   note?: string;
   /** default 0 */

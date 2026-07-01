@@ -107,14 +107,16 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, XRP Amount(string drops), XPLA amount). SOL/SPL 은 transfer 파싱 후(현재 signature-only).
     - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, 전 비-EVM). monorepo 발산: TRC20 은 range=tron path·confirmationThreshold=trc20 path. UTXO 금액은 bitcoind `vout.value`(BTC 소수 문자열) 그대로 — satoshi 환산 아직(§13).
 
-13. **amount 사토시 통일 + fee_amount 파싱 — prototype 완료, monorepo TODO**. **DB `amount` = 사토시(8자리 정수)**: `toSatoshi(raw, rawDecimal)` = `BigNumber(raw).shiftedBy(8-rawDecimal).floor` (8자리 미만 버림). 원본은 **`raw_amount` 컬럼**에 보존(환산 lossy). **`fee_amount`도 사토시**(EVM=gasUsed×effectiveGasPrice(raw wei)→환산).
-    - **rawDecimal 소스**: 코인=ParamStore `rawDecimal`(EVM 18/BTC·BCH 8/SOL 9/XLM 7/XRP·TRX·XPLA 6) — `AssetService.getRawDecimal()` 로 노출. 토큰=`main.token.token_decimal`. 환산은 **tx-scanner**(`toInsertParams`)에서: 코인=`service.getRawDecimal()`, 토큰=contract→rawDecimal 맵.
-    - blockchain 은 **raw 최소단위 정수** 반환(UTXO 는 `vout.value`(BTC소수)→satoshi 정수로 맞춤). EVM 네이티브는 `feeAmount`(raw wei) 채움.
-    - **prototype 완료**(2026-07-01): `blockchain/amount.ts` `toSatoshi`, ParamStore `getRawDecimal`, `AssetService.getRawDecimal()`(전 코인), `TokenRow.rawDecimal`, `DetectedTx.feeAmount`, `InsertParams.{rawAmount, feeAmount}`. `bignumber.js` 의존성 추가.
-    - **monorepo TODO**: `detected_transactions` 에 `raw_amount` 컬럼 추가 + `scanTransactions` 저장 시 `amount`=toSatoshi(raw, rawDecimal)·`raw_amount`=raw·`fee_amount`=toSatoshi(feeRaw). rawDecimal 소스는 ParamStore(코인)/main.token.token_decimal(토큰). 큰 수는 BigNumber.
+13. **amount·fee 사토시 통일 + raw_amount/raw_fee_amount — prototype 완료, monorepo TODO**. **DB `amount`·`fee_amount` = 사토시(8자리 정수)**: `toSatoshi(raw, rawDecimal)` = `BigNumber(raw).shiftedBy(8-rawDecimal).floor`(버림). 원본은 **`raw_amount`·`raw_fee_amount` 컬럼**에 보존(환산 lossy).
+    - **amount rawDecimal**: 코인=ParamStore `rawDecimal`(EVM 18/BTC·BCH 8/SOL 9/XLM 7/XRP·TRX·XPLA 6, `AssetService.getRawDecimal()`), 토큰=`main.token.token_decimal`(`TokenRow.rawDecimal`).
+    - **fee rawDecimal = 항상 native(base) 자산 scale**(수수료는 base 코인으로 소모). 코인=자기 rawDecimal, **토큰=기반 체인 코인 rawDecimal**. 환산은 tx-scanner `toInsertParams(assetId, rawDecimal, tx, feeRawDecimal)`.
+    - blockchain 은 **raw 최소단위 정수** 반환(UTXO=`vout.value` BTC소수→satoshi 정수). 공용 유틸은 `blockchain/crypto-util.ts`(`toSatoshi`, `SATOSHI_DECIMALS`).
+    - **fee 파싱 현황**: EVM 네이티브=gasUsed×effectiveGasPrice(receipt), **XRP=`tx.Fee`, XLM=`fee_charged`, XPLA=`auth_info.fee`(axpla)** 완료. TRX(getTransactionInfo 필요)·UTXO(vin−vout prevout 필요)·SOL/SPL(getParsedTransaction meta.fee 필요)은 추가 fetch/parse 라 **TODO**. 토큰 fee(기반 코인)도 TODO(receipt 미조회).
+    - **prototype 완료**(2026-07-01): `crypto-util.ts`, ParamStore `getRawDecimal`, `AssetService.getRawDecimal()`, `TokenRow.rawDecimal`, `DetectedTx.feeAmount`, `InsertParams.{rawAmount, feeAmount, rawFeeAmount}`. `bignumber.js` 의존성.
+    - **monorepo TODO**: `detected_transactions` 에 `raw_amount`·`raw_fee_amount` 컬럼 + `scanTransactions` 저장 시 `amount`/`fee_amount`=toSatoshi(raw). **fee 는 base 자산 scale**. 큰 수 BigNumber.
 
 **⏳ 다음 sync 작업:**
-- **fee_amount 비-EVM 확장**: 현재 EVM 네이티브만 fee 파싱. TRX(bandwidth/energy)·XRP(`tx.Fee`)·XLM(`fee_charged`)·XPLA(gas)·UTXO(vin−vout) 등 체인별 수수료는 후속(양쪽).
+- **fee_amount 나머지 체인**: TRX(getTransactionInfo)·UTXO(vin−vout)·SOL/SPL(parsed meta.fee)·토큰(기반 코인 fee) — 추가 fetch/parse 필요(양쪽).
 
 **주의/약속:**
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.

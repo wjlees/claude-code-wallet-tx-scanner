@@ -1,5 +1,9 @@
 import { BigNumber } from 'bignumber.js';
 
+/**
+ * 블록체인 공용 유틸 (금액 환산 등). 여러 모듈에서 공통으로 쓰는 crypto 관련 헬퍼를 모은다.
+ */
+
 /** DB 저장 금액 단위: 사토시(8자리 정수). */
 export const SATOSHI_DECIMALS = 8;
 

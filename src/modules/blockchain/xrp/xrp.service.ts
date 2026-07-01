@@ -108,6 +108,8 @@ export class XrpService implements AssetService, OnModuleInit {
           fromAddress: tx.Account,
           toAddress: tx.Destination,
           amount,
+          // 수수료: tx.Fee(drops, native XRP). rawDecimal 은 XRP(6) 로 tx-scanner 가 환산.
+          feeAmount: typeof tx.Fee === 'string' ? tx.Fee : undefined,
           memoId:
             tx.DestinationTag !== undefined
               ? String(tx.DestinationTag)

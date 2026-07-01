@@ -109,6 +109,8 @@ export class XplaService implements AssetService, OnModuleInit {
         // status: 성공 tx 만(Cosmos tx_response.code===0).
         if (txr.code && Number(txr.code) !== 0) continue;
         const memo = txr.tx?.body?.memo || undefined;
+        // 수수료: auth_info.fee.amount 의 axpla(native). rawDecimal 은 XPLA(6) 로 tx-scanner 가 환산.
+        const feeAmount = this.feeOf(txr);
         const recipients = this.eventValues(txr, 'transfer', 'recipient');
         const senders = this.eventValues(txr, 'transfer', 'sender');
         const amounts = this.eventValues(txr, 'transfer', 'amount');
@@ -122,6 +124,7 @@ export class XplaService implements AssetService, OnModuleInit {
               fromAddress: sender,
               toAddress: recipient,
               amount: amounts[i],
+              feeAmount, // tx 단위 수수료(native axpla)
               memoId: memo,
               blockNumber: n,
               txIndex: i, // tx 내 transfer 이벤트 순번
@@ -134,6 +137,13 @@ export class XplaService implements AssetService, OnModuleInit {
 
     this.logger.log(`scanned blocks ${from}~${to} (XPLA) → ${txs.length} tx`);
     return { txs, nextCursor: String(to) };
+  }
+
+  /** tx 의 수수료(native axpla, raw)를 auth_info.fee.amount 에서 뽑는다. 없으면 undefined. */
+  private feeOf(txr: any): string | undefined {
+    const coins = txr.tx?.auth_info?.fee?.amount ?? [];
+    const native = coins.find((c: any) => c.denom === XPLA_DENOM);
+    return native?.amount;
   }
 
   /**

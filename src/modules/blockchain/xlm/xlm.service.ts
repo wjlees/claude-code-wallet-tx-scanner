@@ -104,6 +104,8 @@ export class XlmService implements AssetService, OnModuleInit {
           txHash: record.hash,
           fromAddress,
           toAddress: fromAddress === address ? undefined : address,
+          // 수수료: fee_charged(stroops, native XLM). rawDecimal 은 XLM(7) 로 tx-scanner 가 환산.
+          feeAmount: (record as any).fee_charged,
           memoId: (record as any).memo,
           blockNumber: (record as any).ledger,
           raw: record,

@@ -10,7 +10,7 @@ import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
 import { WalletService } from '../wallet/wallet.service';
-import { toSatoshi } from '../blockchain/amount';
+import { toSatoshi } from '../blockchain/crypto-util';
 import {
   DETECTED_TRANSACTIONS_REPOSITORY,
   DetectedTransactionsRepository,
@@ -152,13 +152,17 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DetectedTx → InsertParams. amount/feeAmount(raw)를 rawDecimal 로 **사토시(8자리)** 환산하고,
-   * 원본은 rawAmount 로 보존. amount 없으면 '0'.
+   * DetectedTx → InsertParams.
+   * - `amount` = `toSatoshi(raw, rawDecimal)`(자산 decimals), 원본은 `rawAmount`.
+   * - `feeAmount` = `toSatoshi(feeRaw, feeRawDecimal)`. **수수료는 항상 native(base) 자산**이라
+   *   base 자산 decimals 기준. 코인=자기 rawDecimal, 토큰=기반 체인 코인 rawDecimal.
+   *   `feeRawDecimal` 없으면 fee 환산 skip(rawFeeAmount 만 보존).
    */
   private toInsertParams(
     assetId: number,
     rawDecimal: number,
     tx: DetectedTx,
+    feeRawDecimal?: number,
   ): InsertDetectedTransactionParams {
     return {
       assetId,
@@ -170,13 +174,16 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
       amount: tx.amount != null ? toSatoshi(tx.amount, rawDecimal) : '0',
       rawAmount: tx.amount,
       feeAmount:
-        tx.feeAmount != null ? toSatoshi(tx.feeAmount, rawDecimal) : undefined,
+        tx.feeAmount != null && feeRawDecimal != null
+          ? toSatoshi(tx.feeAmount, feeRawDecimal)
+          : undefined,
+      rawFeeAmount: tx.feeAmount,
       note: tx.memoId,
       status: 0,
     };
   }
 
-  /** 코인 DetectedTx 저장. amount 는 코인 rawDecimal 로 사토시 환산. */
+  /** 코인 DetectedTx 저장. amount·fee 모두 코인 rawDecimal(native)로 사토시 환산. */
   private async saveDetected(
     assetId: number,
     rawDecimal: number,
@@ -184,7 +191,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     for (const tx of txs) {
       await this.detectedRepository.insertDetectedTransactions(
-        this.toInsertParams(assetId, rawDecimal, tx),
+        this.toInsertParams(assetId, rawDecimal, tx, rawDecimal),
       );
     }
   }
@@ -206,6 +213,8 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
       if (info === undefined) {
         continue; // 추적 대상 토큰이 아니면 skip
       }
+      // feeRawDecimal 생략: 토큰 수수료는 기반 체인 코인이라 그 코인 rawDecimal 이 필요.
+      // 현재 토큰은 fee 미산출(receipt 미조회) → fee 환산 skip. (token fee 추가 시 base coin decimal 전달)
       await this.detectedRepository.insertDetectedTransactions(
         this.toInsertParams(info.assetId, info.rawDecimal, tx),
       );
