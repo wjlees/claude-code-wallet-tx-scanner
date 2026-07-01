@@ -3,7 +3,11 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getConfirmations,
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+} from '../parameter-store';
 import { XplaRestClient } from './xpla-rest.client';
 
 const XPLA_PATH = 'xpla';
@@ -16,6 +20,8 @@ interface XplaState {
   client?: XplaRestClient;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** reorg 안전 마진(스캔 끝 = head-confirmations). commit 최종이라 보통 0. */
+  confirmations?: number;
 }
 
 /**
@@ -51,6 +57,7 @@ export class XplaService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.confirmations = await getConfirmations(XPLA_PATH);
     this.state.client = new XplaRestClient(url);
     this.logger.log(
       `LCD REST client initialized (maxDepositScanRange=${range})`,
@@ -73,11 +80,13 @@ export class XplaService implements AssetService, OnModuleInit {
     }
 
     const head = await client.getLatestHeight();
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
+    // confirmations 만큼 뒤처진 높이까지만(commit 최종이라 보통 0=무캡).
+    const safeHead = Math.max(head - (this.state.confirmations ?? 0), 0);
+    const from = cursor === null ? safeHead : Number(cursor) + 1;
+    if (from > safeHead) {
+      return { txs: [], nextCursor: String(safeHead) };
     }
-    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, safeHead);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
@@ -85,6 +94,8 @@ export class XplaService implements AssetService, OnModuleInit {
     for (let n = from; n <= to; n++) {
       const txResponses = await client.getTxsByHeight(n);
       for (const txr of txResponses) {
+        // status: 성공 tx 만(Cosmos tx_response.code===0).
+        if (txr.code && Number(txr.code) !== 0) continue;
         const memo = txr.tx?.body?.memo || undefined;
         const recipients = this.eventValues(txr, 'transfer', 'recipient');
         const senders = this.eventValues(txr, 'transfer', 'sender');
@@ -92,6 +103,7 @@ export class XplaService implements AssetService, OnModuleInit {
         for (let i = 0; i < recipients.length; i++) {
           const recipient = recipients[i];
           const sender = senders[i];
+          if (!amounts[i] || parseInt(amounts[i], 10) <= 0) continue; // 0금액 제외
           if (watch.has(recipient) || (sender && watch.has(sender))) {
             txs.push({
               txHash: txr.txhash,

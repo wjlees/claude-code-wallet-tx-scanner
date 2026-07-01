@@ -69,7 +69,7 @@ export class UtxoRpcClient {
             ? [spk.address]
             : (spk.addresses ?? []);
           const hit = outAddrs.find((a) => watch.has(a));
-          if (hit) {
+          if (hit && Number(vout.value) > 0) {
             // vout 수신자 = toAddress. 보낸 주소(fromAddress)는 prevout 추적 필요(TODO) → 생략.
             txs.push({
               txHash: tx.txid,

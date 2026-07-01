@@ -4,7 +4,11 @@ import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getConfirmations,
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+} from '../parameter-store';
 
 const TRON_PATH = 'tron'; // path 는 tron (symbol 은 trx)
 
@@ -14,6 +18,8 @@ interface TrxState {
   tronWeb?: TronWeb;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** reorg 안전 마진(스캔 끝 = head-confirmations). 미설정 0. */
+  confirmations?: number;
 }
 
 /**
@@ -49,6 +55,7 @@ export class TrxService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.confirmations = await getConfirmations(TRON_PATH);
     this.state.tronWeb = new TronWeb({ fullHost: url });
     this.logger.log(`tronWeb initialized (maxDepositScanRange=${range})`);
   }
@@ -74,11 +81,13 @@ export class TrxService implements AssetService, OnModuleInit {
     }
 
     const head = await this.getBlockHeight();
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
+    // confirmations 만큼 뒤처진 지점까지만(reorg 제외).
+    const safeHead = Math.max(head - (this.state.confirmations ?? 0), 0);
+    const from = cursor === null ? safeHead : Number(cursor) + 1;
+    if (from > safeHead) {
+      return { txs: [], nextCursor: String(safeHead) };
     }
-    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, safeHead);
 
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
@@ -86,9 +95,14 @@ export class TrxService implements AssetService, OnModuleInit {
     for (let n = from; n <= to; n++) {
       const block = await tronWeb.trx.getBlock(n);
       for (const tx of (block as any).transactions ?? []) {
+        // status: 컨트랙트 실행 성공만(ret[0].contractRet==='SUCCESS')
+        if (tx.ret?.[0]?.contractRet && tx.ret[0].contractRet !== 'SUCCESS') {
+          continue;
+        }
         const contract = tx.raw_data?.contract?.[0];
         if (!contract || contract.type !== 'TransferContract') continue;
         const v = contract.parameter?.value ?? {};
+        if (!(Number(v.amount) > 0)) continue; // 0금액 제외
         const fromAddress = v.owner_address
           ? tronWeb.address.fromHex(v.owner_address)
           : undefined;
@@ -103,7 +117,7 @@ export class TrxService implements AssetService, OnModuleInit {
             txHash: tx.txID,
             fromAddress,
             toAddress,
-            amount: v.amount !== undefined ? String(v.amount) : undefined,
+            amount: String(v.amount),
             blockNumber: n,
             raw: { txID: tx.txID },
           });

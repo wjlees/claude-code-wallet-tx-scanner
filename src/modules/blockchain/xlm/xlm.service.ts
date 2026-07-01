@@ -84,6 +84,8 @@ export class XlmService implements AssetService, OnModuleInit {
 
       for (const record of page.records) {
         nextCursor = record.paging_token;
+        // status: 성공 tx 만. (Stellar ledger close=최종이라 confirmations 불필요)
+        if ((record as any).successful === false) continue;
         // tx 레벨엔 source_account(from)만 명확. destination 은 operation 파싱 필요(TODO).
         // 스캔 대상 계정이 sender 가 아니면 수신자(to)로 본다(best-effort).
         const fromAddress = record.source_account;

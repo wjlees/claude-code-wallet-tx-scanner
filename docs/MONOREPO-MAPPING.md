@@ -102,12 +102,12 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **prototype 완료**(2026-07-01, EVM native+token). 다른 체인은 같은 원칙 확장 **TODO(양쪽)** — 아래 12.
    - **monorepo TODO**: monorepo **`scanTransactions`** 에 위 변경 동일 적용(status/value 필터, confirmations cap, tx_index=logIndex, usingBatchRequest batch/promise, raw 금액, flat 반환). **scanBlocks 는 손대지 않음.**
 
-**⏳ 다음 sync 작업:**
-12. **입금 감지 semantic 비-EVM 확장** (§11 을 나머지 체인 `scanTransactions` 로). 체인별 성공 지표·확정 방식이 달라 아래대로:
-    - confirmations cap(블록높이 기반): BTC/BCH `to=height-confirmations`, TRX/TRC20 `to=head-confirmations`. 확정 즉각 체인(XRP validated / XLM·XPLA commit)은 보통 0. SOL/SPL 은 numeric cap 대신 commitment `finalized`.
+12. **입금 감지 semantic 비-EVM 확장 (§11 을 나머지 체인 `scanTransactions` 로) — prototype 완료, monorepo TODO)**. 체인별 성공 지표·확정 방식:
+    - confirmations cap(블록높이 기반): BTC/BCH `to=height-confirmations`, TRX/TRC20/XPLA `to=head-confirmations`. 즉시확정(XRP validated / XLM ledger close)은 캡 없음(보통 0). SOL/SPL 은 numeric cap 대신 commitment **`finalized`**.
     - status(성공) 필터(체인별): UTXO=불필요(블록 포함=유효), TRX/TRC20=`ret[0].contractRet==='SUCCESS'`(TRC20 은 call data 디코드라 실패 호출도 잡혀 **필수**), XRP=`meta.TransactionResult==='tesSUCCESS'`, XLM=`successful===true`, XPLA=`tx_response.code===0`, SOL/SPL=`sig.err===null`.
-    - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, …). SOL/SPL 은 transfer 파싱 후.
-    - 양쪽 미적용(EVM 만 완료). prototype·monorepo `scanTransactions` 동일 적용 예정.
+    - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, XRP Amount(string drops), XPLA amount). SOL/SPL 은 transfer 파싱 후(현재 signature-only).
+    - **prototype 완료**(2026-07-01, 전 비-EVM). 검증: 부팅 시 SOL/SPL/XLM/XRP/TRX/XPLA 스캔 정상, 로직 에러 없음(공용 노드 429 rate-limit 은 별개).
+    - **monorepo TODO**: monorepo 비-EVM `scanTransactions` 에 동일 적용(위 체인별 status·value·cap).
 
 **주의/약속:**
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.

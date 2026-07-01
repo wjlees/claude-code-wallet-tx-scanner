@@ -3,7 +3,7 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange } from '../parameter-store';
+import { getConfirmations, getMaxDepositScanRange } from '../parameter-store';
 import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
@@ -25,6 +25,8 @@ export class Trc20Service implements TokenService, OnModuleInit {
   private readonly logger = new Logger('Trc20Service');
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   private maxDepositScanRange?: number;
+  /** reorg 안전 마진(스캔 끝 = head-confirmations). 미설정 0. */
+  private confirmations = 0;
 
   constructor(private readonly trx: TrxService) {}
 
@@ -41,6 +43,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
       return;
     }
     this.maxDepositScanRange = range;
+    this.confirmations = await getConfirmations(TRC20_PATH);
   }
 
   getTokenTypeId(): number {
@@ -59,11 +62,13 @@ export class Trc20Service implements TokenService, OnModuleInit {
     }
 
     const head = await this.trx.getBlockHeight();
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
+    // confirmations 만큼 뒤처진 지점까지만(reorg 제외).
+    const safeHead = Math.max(head - this.confirmations, 0);
+    const from = cursor === null ? safeHead : Number(cursor) + 1;
+    if (from > safeHead) {
+      return { txs: [], nextCursor: String(safeHead) };
     }
-    const to = Math.min(from + this.maxDepositScanRange - 1, head);
+    const to = Math.min(from + this.maxDepositScanRange - 1, safeHead);
 
     const watch = new Set(addresses);
     const contracts = new Set(contractAddresses); // 이 token_type 의 토큰 컨트랙트들
@@ -72,6 +77,11 @@ export class Trc20Service implements TokenService, OnModuleInit {
     for (let n = from; n <= to; n++) {
       const block = await tronWeb.trx.getBlock(n);
       for (const tx of (block as any).transactions ?? []) {
+        // status: 컨트랙트 실행 성공만. TRC20 은 로그가 아니라 call data 디코드라
+        // 실패한 호출도 잡히므로 contractRet 체크가 필수(EVM 토큰과 대비).
+        if (tx.ret?.[0]?.contractRet && tx.ret[0].contractRet !== 'SUCCESS') {
+          continue;
+        }
         const contract = tx.raw_data?.contract?.[0];
         if (!contract || contract.type !== 'TriggerSmartContract') continue;
         const v = contract.parameter?.value ?? {};
@@ -86,6 +96,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
           : undefined;
         const amount =
           data.length >= 136 ? BigInt('0x' + data.slice(72, 136)) : 0n;
+        if (amount <= 0n) continue; // 0금액 제외
         const contractAddr = v.contract_address
           ? tronWeb.address.fromHex(v.contract_address)
           : undefined;

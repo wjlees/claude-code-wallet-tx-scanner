@@ -83,12 +83,20 @@ export class XrpService implements AssetService, OnModuleInit {
           entry.tx?.ledger_index ?? entry.ledger_index ?? tx.ledger_index ?? 0;
         if (ledgerIndex > maxLedger) maxLedger = ledgerIndex;
         if (tx.TransactionType && tx.TransactionType !== 'Payment') continue;
+        // status: 성공(tesSUCCESS) tx 만. (validated ledger 라 reorg 없음 → confirmations 불필요)
+        const meta = entry.meta ?? entry.metaData ?? {};
+        if (meta.TransactionResult && meta.TransactionResult !== 'tesSUCCESS') {
+          continue;
+        }
+        // 네이티브 XRP(string drops)만 + 0금액 제외. (issued currency=object 는 대상 아님)
+        const amount = typeof tx.Amount === 'string' ? tx.Amount : undefined;
+        if (!amount || Number(amount) <= 0) continue;
 
         txs.push({
           txHash: entry.hash ?? tx.hash,
           fromAddress: tx.Account,
           toAddress: tx.Destination,
-          amount: typeof tx.Amount === 'string' ? tx.Amount : undefined,
+          amount,
           memoId:
             tx.DestinationTag !== undefined
               ? String(tx.DestinationTag)

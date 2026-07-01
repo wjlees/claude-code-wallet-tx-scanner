@@ -49,7 +49,8 @@ export class SolService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.connection = new Connection(url, 'confirmed');
+    // 'finalized' = SOL 의 확정(reorg 안전) 지점 — EVM confirmations cap 에 대응.
+    this.state.connection = new Connection(url, 'finalized');
     this.logger.log(`connection initialized (maxDepositScanRange=${range})`);
   }
 
@@ -82,6 +83,7 @@ export class SolService implements AssetService, OnModuleInit {
         newest = sigs[0].signature;
       }
       for (const sig of sigs) {
+        if (sig.err) continue; // 실패 tx 제외(status: err===null 만)
         // signature 만 수집. from/to·amount 는 getParsedTransaction 파싱 필요(TODO).
         txs.push({
           txHash: sig.signature,

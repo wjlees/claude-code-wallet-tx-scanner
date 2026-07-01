@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { ScanResult } from '../interfaces/scan.types';
-import { getMaxDepositScanRange } from '../parameter-store';
+import { getConfirmations, getMaxDepositScanRange } from '../parameter-store';
 import {
   UtxoAssetConfig,
   UtxoCommonService,
@@ -20,6 +20,8 @@ export class BchService implements AssetService, OnModuleInit {
   private readonly logger = new Logger('BchService');
   /** 1회 스캔 블록 수. 노드+maxDepositScanRange 둘 다 있어야 스캔. 없으면 skip. */
   private maxDepositScanRange?: number;
+  /** reorg 안전 마진(스캔 끝 = height-confirmations). 미설정 0. */
+  private confirmations = 0;
 
   constructor(private readonly utxo: UtxoCommonService) {}
 
@@ -36,6 +38,7 @@ export class BchService implements AssetService, OnModuleInit {
       return;
     }
     this.maxDepositScanRange = range;
+    this.confirmations = await getConfirmations(this.cfg.path);
   }
 
   getAssetId(): number {
@@ -58,6 +61,7 @@ export class BchService implements AssetService, OnModuleInit {
       addresses,
       cursor,
       this.maxDepositScanRange,
+      this.confirmations,
     );
   }
 
