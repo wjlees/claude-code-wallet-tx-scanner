@@ -123,7 +123,13 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **prototype 완료**(2026-07-01): ethereum-common(방향별 필터+status+fee 조건부), XRP/XLM/XPLA fee 조건부. `DetectedTx.status`.
     - **monorepo TODO**: `scanTransactions` native 스캔을 방향별 필터로(from∈watch=value/status 무관+fee, to∈watch=value>0·status1). fee_amount 는 fee-payer∈watch 일 때만. 실패 tx status=0 기록. 토큰 행엔 fee 안 붙임(native 행이 담당).
     - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 잠정). **대안(보류)**: 한 tx 1행(`amountFrom/amountTo/rawFrom/rawTo`)? 실패 건 때문에 애매 → **2행이 제일 깔끔**으로 결정(목표=최대한 다 감지·기록, 실패/포워딩 tx 도 기록).
-- **fee_amount 나머지 체인**(추가 fetch/parse 필요): TRX(getTransactionInfo)·UTXO(`crypto_address_unspents` 로 vin 값)·SOL/SPL(parsed meta.fee). 각 체인 fee-payer 판정 + native 행.
+- **fee_amount 나머지 체인**: **TRX 완료**(getTransactionInfo, TriggerSmartContract originate 도 native fee 행). **SOL 완료**(getParsedTransaction meta.fee/err, fee-payer=accountKeys[0]; SPL 전송 fee 도 SOL native 행). **UTXO 는 아래 15**.
+15. **UTXO fee + 출금(vin) 감지 — 설계 결정 필요**. UTXO fee = Σvin − Σvout 인데 (1) 현재 스캐너는 **수신(vout)만** 감지 → **vin측(우리 UTXO 소비=출금) 감지 선행 필요**(fee 는 우리가 보낸 tx 에서만), (2) vin 값은 `crypto_address_unspents`(우리 UTXO 테이블, spent/unspent)에서 조회 — 이게 **DB 라 rule 1(blockchain 은 DB 의존 X)과 충돌**. 어디서 조회할지 결정:
+    - (a) tx-scanner 가 unspents 조회를 제공(getScanAddresses 처럼)해 UTXO 스캔에 콜백 전달 — blockchain 순수 유지.
+    - (b) `CryptoAddressUnspentsRepository`(port) 를 utxo-common/btc/bch 에 주입 — rule 1 완화(입력 데이터 조회는 영속화와 다름).
+    - (c) rule 1 을 read-side 스캔 입력에 한해 완화.
+    - monorepo 는 실제 `crypto_address_unspents` 사용. prototype 은 (a)/(b)/(c) 결정 후 stub 으로 구현.
+- **SOL/SPL from/to·amount 파싱**: getParsedTransaction 의 balance delta(native)·tokenBalance delta(SPL) 로 — 현재 SOL 은 fee/status/signature 까지, amount 미파싱(TODO).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
