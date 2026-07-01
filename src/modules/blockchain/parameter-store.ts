@@ -54,12 +54,12 @@ export async function getMaxDepositScanRange(
 }
 
 /**
- * 스캔 안전 마진(confirmations). 스캔 끝을 `head - confirmations` 로 캡해
- * reorg 로 뒤집힐 수 있는 최근 블록을 감지에서 제외한다(감지 tx 는 항상 ≥confirmations 확정).
+ * 스캔 안전 마진(confirmationThreshold). 스캔 끝을 `head - confirmationThreshold` 로 캡해
+ * reorg 로 뒤집힐 수 있는 최근 블록을 감지에서 제외한다(감지 tx 는 항상 ≥confirmationThreshold 확정).
  * 미설정이면 **0**(캡 없음). monorepo 의 `confirmationThreshold` 와 같은 개념.
  */
-export async function getConfirmations(path: string): Promise<number> {
-  const raw = (await getParametersByPath(path)).confirmations;
+export async function getConfirmationThreshold(path: string): Promise<number> {
+  const raw = (await getParametersByPath(path)).confirmationThreshold;
   const n = raw !== undefined ? parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 0;
 }

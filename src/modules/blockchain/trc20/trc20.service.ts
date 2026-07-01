@@ -3,7 +3,10 @@ import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getConfirmations, getMaxDepositScanRange } from '../parameter-store';
+import {
+  getConfirmationThreshold,
+  getMaxDepositScanRange,
+} from '../parameter-store';
 import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
@@ -25,8 +28,8 @@ export class Trc20Service implements TokenService, OnModuleInit {
   private readonly logger = new Logger('Trc20Service');
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   private maxDepositScanRange?: number;
-  /** reorg 안전 마진(스캔 끝 = head-confirmations). 미설정 0. */
-  private confirmations = 0;
+  /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). 미설정 0. */
+  private confirmationThreshold = 0;
 
   constructor(private readonly trx: TrxService) {}
 
@@ -43,7 +46,7 @@ export class Trc20Service implements TokenService, OnModuleInit {
       return;
     }
     this.maxDepositScanRange = range;
-    this.confirmations = await getConfirmations(TRC20_PATH);
+    this.confirmationThreshold = await getConfirmationThreshold(TRC20_PATH);
   }
 
   getTokenTypeId(): number {
@@ -62,8 +65,8 @@ export class Trc20Service implements TokenService, OnModuleInit {
     }
 
     const head = await this.trx.getBlockHeight();
-    // confirmations 만큼 뒤처진 지점까지만(reorg 제외).
-    const safeHead = Math.max(head - this.confirmations, 0);
+    // confirmationThreshold 만큼 뒤처진 지점까지만(reorg 제외).
+    const safeHead = Math.max(head - this.confirmationThreshold, 0);
     const from = cursor === null ? safeHead : Number(cursor) + 1;
     if (from > safeHead) {
       return { txs: [], nextCursor: String(safeHead) };

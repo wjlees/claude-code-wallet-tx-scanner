@@ -94,20 +94,21 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 
 11. **입금 감지 semantic — `scanTransactions`** (양쪽 동기화 대상). ⚠️ **`scanBlocks` 는 별개 레거시**(기존 입금 로직 복사본)로 **건드리지 않는다** — status/value/confirmations 패턴의 **참고용**일 뿐. 우리가 만드는 건 `scanTransactions`. 합의된 semantic(= prototype `scanTransactions` 에 적용한 것):
    - **정확도 필터 = blockchain 층**: EVM 네이티브 = `getBlock(n,true)`(hydrated)로 후보(from/to 매칭 + `value>0`) 거른 뒤 **매칭 tx 만 `getTransactionReceipt` → `status===1`** (2-phase, `getTransaction` 불필요; revert 시 값 안 움직여 status 필수). EVM 토큰 = **revert tx 로그는 `eth_getLogs` 에 안 나옴(로그 존재=성공)** → receipt 불필요, `data≠0`(0금액) 필터만.
-   - **confirmations = endBlock 캡**: `to=min(from+range-1, head-confirmations)`(스냅샷 저장 X). `getConfirmations(path)`(ParamStore, 미설정 0).
+   - **confirmationThreshold = endBlock 캡**: `to=min(from+range-1, head-confirmationThreshold)`(스냅샷 저장 X). ParamStore 키 **`confirmationThreshold`**(미설정 0). prototype=`getConfirmationThreshold(path)` 헬퍼, monorepo=`parseInt(params.confirmationThreshold,10)` 인라인(같은 키).
    - **tx_index = `log.logIndex`(결정적)**. ⚠️ 주의: scanBlocks(레거시)의 0-based 카운터(`buildUpAddressToTransactions`)는 `Promise.all` 공유 카운터라 멀티토큰 tx 에서 값이 흔들림 → **scanTransactions 로 그 패턴을 복사하지 말 것**, logIndex 사용.
    - **금액 = raw 최소단위(blockchain), scale 은 tx-scanner**. **from/to**(in/out 의미부여 X, §8).
    - **반환 = flat `DetectedTx[]`**(prototype). monorepo `scanTransactions` 도 flat. (scanBlocks 의 grouped `{[assetId]:{[toAddress]:[]}}` 는 별개.)
    - **성능**: **`usingBatchRequest` 플래그로 batch/promise 선택**. prototype=`EthereumBasedAssetType.usingBatchRequest` → `EthereumCommonService.getBlocks`/`getReceipts`(true=JSON-RPC 배열 batch 청크 병렬, false=web3 개별 Promise.all). (scanBlocks 의 `blockRangeToScanedTxsByBatch/ByPromise` 와 같은 개념 — scanTransactions 에도 동일 적용.)
-   - **prototype 완료**(2026-07-01, EVM native+token). 다른 체인은 같은 원칙 확장 **TODO(양쪽)** — 아래 12.
-   - **monorepo TODO**: monorepo **`scanTransactions`** 에 위 변경 동일 적용(status/value 필터, confirmations cap, tx_index=logIndex, usingBatchRequest batch/promise, raw 금액, flat 반환). **scanBlocks 는 손대지 않음.**
+   - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, EVM native+token). monorepo 발산: range path=base asset path(klay 등)에서 읽고 confirmationThreshold=token path(kip7 등) — prototype 은 둘 다 token path. (기능 동일, path 소스만 차이.)
 
 12. **입금 감지 semantic 비-EVM 확장 (§11 을 나머지 체인 `scanTransactions` 로) — prototype 완료, monorepo TODO)**. 체인별 성공 지표·확정 방식:
     - confirmations cap(블록높이 기반): BTC/BCH `to=height-confirmations`, TRX/TRC20/XPLA `to=head-confirmations`. 즉시확정(XRP validated / XLM ledger close)은 캡 없음(보통 0). SOL/SPL 은 numeric cap 대신 commitment **`finalized`**.
     - status(성공) 필터(체인별): UTXO=불필요(블록 포함=유효), TRX/TRC20=`ret[0].contractRet==='SUCCESS'`(TRC20 은 call data 디코드라 실패 호출도 잡혀 **필수**), XRP=`meta.TransactionResult==='tesSUCCESS'`, XLM=`successful===true`, XPLA=`tx_response.code===0`, SOL/SPL=`sig.err===null`.
     - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, XRP Amount(string drops), XPLA amount). SOL/SPL 은 transfer 파싱 후(현재 signature-only).
-    - **prototype 완료**(2026-07-01, 전 비-EVM). 검증: 부팅 시 SOL/SPL/XLM/XRP/TRX/XPLA 스캔 정상, 로직 에러 없음(공용 노드 429 rate-limit 은 별개).
-    - **monorepo TODO**: monorepo 비-EVM `scanTransactions` 에 동일 적용(위 체인별 status·value·cap).
+    - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, 전 비-EVM). monorepo 발산: TRC20 은 range=tron path·confirmationThreshold=trc20 path. UTXO 금액은 bitcoind `vout.value`(BTC 소수 문자열) 그대로 — satoshi 환산 아직(§13).
+
+**⏳ 다음 sync 작업:**
+13. **amount 사토시 통일 + fee_amount 파싱** (양쪽 미구현). 현재 `amount` 는 체인별 raw 단위(EVM wei, XRP drops, TRX sun, UTXO=BTC소수, 토큰=tokenDecimal) 그대로 저장 → **혼재**. **DB `amount` 는 사토시(8자리 정수)로 통일**: 자산 decimals 기준 8자리 환산 + 8자리 미만 버림(`BigNumber`). 예: wei(18)→`floor(wei/10^10)`, XRP drops(6)→`drops*10^2`, BTC소수→`*10^8`, 토큰→`raw*10^(8-tokenDecimal)`. 환산은 저장 단계(tx-scanner)에서 자산 메타(decimals)로(blockchain 은 raw 반환). 원본 보존용 `raw_amount` 컬럼 추가 권장(사토시 환산은 lossy). **`fee_amount` 도 현재 null → 체인별 수수료 파싱**(EVM=gasUsed×effectiveGasPrice(receipt) 등)해 사토시로. decimals 소스: 코인=자산 config(체인별 상수), 토큰=`main.token.tokenDecimal`. **양쪽 합의 후 구현.**
 
 **주의/약속:**
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.

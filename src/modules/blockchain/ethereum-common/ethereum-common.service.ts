@@ -4,7 +4,7 @@ import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmations,
+  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
 } from '../parameter-store';
@@ -35,8 +35,8 @@ interface EthereumCommonState {
   nodeUrl?: string;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
-  /** 스캔 안전 마진: 스캔 끝을 head-confirmations 로 캡(reorg 제외). 미설정 0. */
-  confirmations?: number;
+  /** 스캔 안전 마진: 스캔 끝을 head-confirmationThreshold 로 캡(reorg 제외). 미설정 0. */
+  confirmationThreshold?: number;
 }
 
 /**
@@ -75,11 +75,13 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmations = await getConfirmations(this.state.config.path);
+    this.state.confirmationThreshold = await getConfirmationThreshold(
+      this.state.config.path,
+    );
     this.state.nodeUrl = url;
     this.state.web3 = new Web3(url);
     this.logger.log(
-      `web3 initialized @ ${this.networkName} (maxDepositScanRange=${range}, confirmations=${this.state.confirmations})`,
+      `web3 initialized @ ${this.networkName} (maxDepositScanRange=${range}, confirmationThreshold=${this.state.confirmationThreshold})`,
     );
   }
 
@@ -109,15 +111,16 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    const { web3, nodeUrl, maxDepositScanRange, confirmations } = this.state;
+    const { web3, nodeUrl, maxDepositScanRange, confirmationThreshold } =
+      this.state;
     if (!web3 || !nodeUrl || maxDepositScanRange === undefined) {
       warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
 
     const head = await this.getBlockHeight();
-    // confirmations 만큼 뒤처진 지점까지만 스캔(reorg 로 뒤집힐 최근 블록 제외).
-    const safeHead = Math.max(head - (confirmations ?? 0), 0);
+    // confirmationThreshold 만큼 뒤처진 지점까지만 스캔(reorg 로 뒤집힐 최근 블록 제외).
+    const safeHead = Math.max(head - (confirmationThreshold ?? 0), 0);
     const from = cursor === null ? safeHead : Number(cursor) + 1;
     if (from > safeHead) {
       // 아직 새로 확정된 블록 없음

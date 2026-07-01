@@ -83,7 +83,7 @@ export class XrpService implements AssetService, OnModuleInit {
           entry.tx?.ledger_index ?? entry.ledger_index ?? tx.ledger_index ?? 0;
         if (ledgerIndex > maxLedger) maxLedger = ledgerIndex;
         if (tx.TransactionType && tx.TransactionType !== 'Payment') continue;
-        // status: 성공(tesSUCCESS) tx 만. (validated ledger 라 reorg 없음 → confirmations 불필요)
+        // status: 성공(tesSUCCESS) tx 만. (validated ledger 라 reorg 없음 → confirmationThreshold 불필요)
         const meta = entry.meta ?? entry.metaData ?? {};
         if (meta.TransactionResult && meta.TransactionResult !== 'tesSUCCESS') {
           continue;

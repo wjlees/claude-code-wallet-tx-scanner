@@ -4,7 +4,7 @@ import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmations,
+  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
 } from '../parameter-store';
@@ -20,8 +20,8 @@ interface XplaState {
   client?: XplaRestClient;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
-  /** reorg 안전 마진(스캔 끝 = head-confirmations). commit 최종이라 보통 0. */
-  confirmations?: number;
+  /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). commit 최종이라 보통 0. */
+  confirmationThreshold?: number;
 }
 
 /**
@@ -57,7 +57,8 @@ export class XplaService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmations = await getConfirmations(XPLA_PATH);
+    this.state.confirmationThreshold =
+      await getConfirmationThreshold(XPLA_PATH);
     this.state.client = new XplaRestClient(url);
     this.logger.log(
       `LCD REST client initialized (maxDepositScanRange=${range})`,
@@ -80,8 +81,11 @@ export class XplaService implements AssetService, OnModuleInit {
     }
 
     const head = await client.getLatestHeight();
-    // confirmations 만큼 뒤처진 높이까지만(commit 최종이라 보통 0=무캡).
-    const safeHead = Math.max(head - (this.state.confirmations ?? 0), 0);
+    // confirmationThreshold 만큼 뒤처진 높이까지만(commit 최종이라 보통 0=무캡).
+    const safeHead = Math.max(
+      head - (this.state.confirmationThreshold ?? 0),
+      0,
+    );
     const from = cursor === null ? safeHead : Number(cursor) + 1;
     if (from > safeHead) {
       return { txs: [], nextCursor: String(safeHead) };

@@ -48,7 +48,7 @@ export class SplService implements TokenService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    // 'finalized' = 확정(reorg 안전) 지점 — EVM confirmations cap 에 대응.
+    // 'finalized' = 확정(reorg 안전) 지점 — EVM confirmationThreshold cap 에 대응.
     this.state.connection = new Connection(url, 'finalized');
     this.logger.log(`connection initialized (maxDepositScanRange=${range})`);
   }

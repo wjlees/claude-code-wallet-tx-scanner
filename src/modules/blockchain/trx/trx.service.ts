@@ -5,7 +5,7 @@ import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmations,
+  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
 } from '../parameter-store';
@@ -18,8 +18,8 @@ interface TrxState {
   tronWeb?: TronWeb;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
-  /** reorg 안전 마진(스캔 끝 = head-confirmations). 미설정 0. */
-  confirmations?: number;
+  /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). 미설정 0. */
+  confirmationThreshold?: number;
 }
 
 /**
@@ -55,7 +55,8 @@ export class TrxService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmations = await getConfirmations(TRON_PATH);
+    this.state.confirmationThreshold =
+      await getConfirmationThreshold(TRON_PATH);
     this.state.tronWeb = new TronWeb({ fullHost: url });
     this.logger.log(`tronWeb initialized (maxDepositScanRange=${range})`);
   }
@@ -81,8 +82,11 @@ export class TrxService implements AssetService, OnModuleInit {
     }
 
     const head = await this.getBlockHeight();
-    // confirmations 만큼 뒤처진 지점까지만(reorg 제외).
-    const safeHead = Math.max(head - (this.state.confirmations ?? 0), 0);
+    // confirmationThreshold 만큼 뒤처진 지점까지만(reorg 제외).
+    const safeHead = Math.max(
+      head - (this.state.confirmationThreshold ?? 0),
+      0,
+    );
     const from = cursor === null ? safeHead : Number(cursor) + 1;
     if (from > safeHead) {
       return { txs: [], nextCursor: String(safeHead) };

@@ -53,15 +53,15 @@ export class UtxoCommonService {
     addresses: string[],
     cursor: string | null,
     maxDepositScanRange: number,
-    confirmations = 0,
+    confirmationThreshold = 0,
   ): Promise<ScanResult> {
     const client = await this.client(cfg);
     if (!client) {
       return { txs: [], nextCursor: cursor };
     }
     const head = await client.getBlockCount();
-    // confirmations 만큼 뒤처진 높이까지만(reorg 제외). UTXO 는 블록 포함=유효라 status 필터 불필요.
-    const safeHead = Math.max(head - confirmations, 0);
+    // confirmationThreshold 만큼 뒤처진 높이까지만(reorg 제외). UTXO 는 블록 포함=유효라 status 필터 불필요.
+    const safeHead = Math.max(head - confirmationThreshold, 0);
     const from = cursor === null ? safeHead : Number(cursor) + 1;
     if (from > safeHead) {
       return { txs: [], nextCursor: String(safeHead) };
