@@ -116,9 +116,15 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **monorepo TODO**: `detected_transactions` 에 `raw_amount`·`raw_fee_amount` 컬럼 + `scanTransactions` 저장 시 `amount`/`fee_amount`=toSatoshi(raw). **fee 는 base 자산 scale**. 큰 수 BigNumber.
 
 **⏳ 다음 sync 작업:**
-- **fee_amount 나머지 체인**: TRX(getTransactionInfo)·UTXO(vin−vout)·SOL/SPL(parsed meta.fee)·토큰(기반 코인 fee) — 추가 fetch/parse 필요(양쪽).
+14. **fee 모델 = "native 자산 별도 행"** (설계 확정 필요, 그 후 구현). 수수료는 항상 native 코인이라 **토큰 행엔 fee 를 넣지 않고, 별도 native(코인) 행**(amount=0, fee_amount=gas)으로 기록. 한 tx_id 가 여러 asset_id 행을 가짐(예: ERC20 전송 → AAA 행(토큰금액,fee null) + ETH 행(amount 0, fee gas)). 유니크 키 `(asset_id, tx_id, tx_index)` 로 공존.
+    - **native 스캔 방향별 필터**: `tx.from∈watch`(우리가 originate=fee 소모)면 **value·status 무관 기록**(fee 행), `to∈watch`(수신)이면 value>0 & status===1 만.
+    - **실패 tx**: from∈watch 면 status=0 로 기록(fee 는 소모됨). 실패 token tx 는 로그 없어 getLogs 엔 안 잡히지만 native 스캔의 from∈watch 로 fee 행 생성.
+    - 장점: fee 가 native 행이라 base-coin decimal 배선 불필요(ETH rawDecimal 로 환산). 토큰 fee 별도 처리 불요.
+    - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 기준 잠정), 실패 tx 처리 범위.
+- **fee_amount 나머지 체인**(위 모델 확정 후): TRX(getTransactionInfo)·UTXO(`crypto_address_unspents` 로 vin 값)·SOL/SPL(parsed meta.fee). 각 체인 fee-payer 판정 + native 행.
 
 **주의/약속:**
+- **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.
 - **DB 엔진 차이(monorepo=MySQL)**: 이 문서의 SQL 표기는 PostgreSQL 편의상 `ON CONFLICT DO NOTHING` 로 적지만, **monorepo 는 MySQL** 이라 실제로는 TypeORM `.orIgnore()`(= `INSERT IGNORE`)로 읽는다(동작 동일). unique index/DDL 문법도 MySQL 기준으로 옮길 것.
 - **SOL/SPL 통합 러너(예약, ✅ 양쪽 분리 일치)**: EVM 은 감지 RPC 가 달라(native=블록/receipt, erc20=getLogs) 코인/토큰 분리가 필연이지만, **SOL/SPL 은 감지 방식이 같다**(signature→`getParsedTransaction`, 한 tx 에 native+SPL delta 동시)서 한 루프로 합칠 여지가 있다(`ScanTarget` both-set 예약). **현재 양쪽 다 SOL/SPL 분리 운영(monorepo 확인 완료)** — 통합은 미적용 상태로 둔다. 추후 합칠 경우 선행: (1) getParsedTransaction 파싱, (2) SPL 입금=ATA 서명이라 owner 서명만으론 누락(ATA 열거 필요). 합칠 땐 양쪽 같이.
