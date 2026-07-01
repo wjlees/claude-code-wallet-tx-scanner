@@ -3,7 +3,7 @@ import { EthereumCommonService } from '../ethereum-common/ethereum-common.servic
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange } from '../parameter-store';
+import { getConfirmations, getMaxDepositScanRange } from '../parameter-store';
 import {
   EthereumBasedTokenType,
   ethereumBasedTokens,
@@ -25,6 +25,8 @@ interface EthereumTokenCommonState {
   baseAssetService?: EthereumCommonService;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** 스캔 안전 마진: 스캔 끝을 head-confirmations 로 캡(reorg 제외). 미설정 0. */
+  confirmations?: number;
 }
 
 /**
@@ -70,6 +72,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.confirmations = await getConfirmations(this.state.config.path);
   }
 
   getTokenTypeId(): number {
@@ -89,7 +92,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     cursor: string | null,
     contractAddresses: string[],
   ): Promise<ScanResult> {
-    const { baseAssetService, maxDepositScanRange } = this.state;
+    const { baseAssetService, maxDepositScanRange, confirmations } = this.state;
     const web3 = baseAssetService?.getWeb3();
     if (!web3 || maxDepositScanRange === undefined) {
       warnMissingNode(this.logger, this.state.config.path);
@@ -97,11 +100,13 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
     }
 
     const head = await baseAssetService!.getBlockHeight();
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
+    // confirmations 만큼 뒤처진 지점까지만(reorg 제외). (토큰은 로그 존재=성공이라 receipt 불필요)
+    const safeHead = Math.max(head - (confirmations ?? 0), 0);
+    const from = cursor === null ? safeHead : Number(cursor) + 1;
+    if (from > safeHead) {
+      return { txs: [], nextCursor: String(safeHead) };
     }
-    const to = Math.min(from + maxDepositScanRange - 1, head);
+    const to = Math.min(from + maxDepositScanRange - 1, safeHead);
 
     const topics = addresses.map(toTopic);
 
@@ -123,6 +128,8 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
 
     const byKey = new Map<string, DetectedTx>();
     for (const log of [...(incoming as any[]), ...(outgoing as any[])]) {
+      // 0금액 transfer 제외(피싱/노이즈). 로그 존재 자체가 성공 tx 라 receipt status 불필요.
+      if (!log.data || BigInt(log.data) === 0n) continue;
       const key = `${log.transactionHash}:${log.logIndex}`;
       if (!byKey.has(key)) byKey.set(key, this.toDetected(log));
     }

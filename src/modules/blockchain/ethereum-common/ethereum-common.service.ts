@@ -3,7 +3,12 @@ import Web3 from 'web3';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
-import { getMaxDepositScanRange, getNodeUrlByPath } from '../parameter-store';
+import {
+  getConfirmations,
+  getMaxDepositScanRange,
+  getNodeUrlByPath,
+} from '../parameter-store';
+import { jsonRpcBatch, numberToHex } from './evm-batch';
 import {
   EthereumBasedAssetType,
   ethereumBasedAssets,
@@ -14,8 +19,12 @@ interface EthereumCommonState {
   config: EthereumBasedAssetType;
   /** onModuleInit 에서 초기화. 노드 미설정이면 undefined(스캔 skip). */
   web3?: Web3;
+  /** 노드 URL (JSON-RPC batch 직접 호출용). onModuleInit 에서 저장. */
+  nodeUrl?: string;
   /** 1회 스캔 블록 수. onModuleInit 에서 ParamStore 로 조회. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
+  /** 스캔 안전 마진: 스캔 끝을 head-confirmations 로 캡(reorg 제외). 미설정 0. */
+  confirmations?: number;
 }
 
 /**
@@ -54,9 +63,11 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
+    this.state.confirmations = await getConfirmations(this.state.config.path);
+    this.state.nodeUrl = url;
     this.state.web3 = new Web3(url);
     this.logger.log(
-      `web3 initialized @ ${this.networkName} (maxDepositScanRange=${range})`,
+      `web3 initialized @ ${this.networkName} (maxDepositScanRange=${range}, confirmations=${this.state.confirmations})`,
     );
   }
 
@@ -86,50 +97,77 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     addresses: string[],
     cursor: string | null,
   ): Promise<ScanResult> {
-    const { web3 } = this.state;
-    if (!web3) {
+    const { web3, nodeUrl, maxDepositScanRange, confirmations } = this.state;
+    if (!web3 || !nodeUrl || maxDepositScanRange === undefined) {
       warnMissingNode(this.logger, this.state.config.path);
       return { txs: [], nextCursor: cursor };
     }
 
     const head = await this.getBlockHeight();
-    // cursor 없으면 현재 head 부터 추적 시작(전체 히스토리 여부는 운영 정책 — TODO).
-    const from = cursor === null ? head : Number(cursor) + 1;
-    if (from > head) {
-      return { txs: [], nextCursor: String(head) };
+    // confirmations 만큼 뒤처진 지점까지만 스캔(reorg 로 뒤집힐 최근 블록 제외).
+    const safeHead = Math.max(head - (confirmations ?? 0), 0);
+    const from = cursor === null ? safeHead : Number(cursor) + 1;
+    if (from > safeHead) {
+      // 아직 새로 확정된 블록 없음
+      return { txs: [], nextCursor: String(safeHead) };
     }
-    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
+    const to = Math.min(from + maxDepositScanRange - 1, safeHead);
 
     const watch = new Set(addresses.map((a) => a.toLowerCase()));
-    const txs: DetectedTx[] = [];
 
-    for (let n = from; n <= to; n++) {
-      const block = await web3.eth.getBlock(n, true);
-      const blockTxs = (block?.transactions ?? []) as any[];
-      for (const tx of blockTxs) {
-        if (typeof tx === 'string') continue; // hydrated=true 면 객체여야 함
-        const fromAddress = tx.from ? String(tx.from).toLowerCase() : undefined;
-        const toAddress = tx.to ? String(tx.to).toLowerCase() : undefined;
-        // from/to 중 하나라도 감시 주소면 기록(in/out 의미부여는 저장 단계에서)
-        if (
-          (fromAddress && watch.has(fromAddress)) ||
-          (toAddress && watch.has(toAddress))
-        ) {
-          txs.push({
-            txHash: String(tx.hash),
-            fromAddress,
-            toAddress,
-            amount: tx.value !== undefined ? String(tx.value) : undefined,
-            blockNumber: n,
-            txIndex: 0, // 네이티브 전송은 tx 자체가 1건 → 위치 0
-            raw: tx,
-          });
+    // 1) 블록 범위를 hydrated(fullTransactions)로 batch+병렬 fetch.
+    const blockNumbers: number[] = [];
+    for (let n = from; n <= to; n++) blockNumbers.push(n);
+    const blocks = await jsonRpcBatch(
+      nodeUrl,
+      blockNumbers.map((n) => ({
+        method: 'eth_getBlockByNumber',
+        params: [numberToHex(n), true],
+      })),
+    );
+
+    // 2) from/to 매칭 + value>0(0금액/피싱 제외) 후보 수집.
+    const candidates: { tx: any; blockNumber: number }[] = [];
+    for (const block of blocks) {
+      if (!block) continue;
+      const bn = Number(block.number);
+      for (const tx of block.transactions ?? []) {
+        if (typeof tx === 'string') continue;
+        const value = tx.value ? BigInt(tx.value) : 0n;
+        if (value <= 0n) continue;
+        const fromA = tx.from ? String(tx.from).toLowerCase() : undefined;
+        const toA = tx.to ? String(tx.to).toLowerCase() : undefined;
+        if ((fromA && watch.has(fromA)) || (toA && watch.has(toA))) {
+          candidates.push({ tx, blockNumber: bn });
         }
       }
     }
 
+    // 3) 후보 tx 만 receipt batch → status===1(성공)만 채택.
+    const receipts = await jsonRpcBatch(
+      nodeUrl,
+      candidates.map((c) => ({
+        method: 'eth_getTransactionReceipt',
+        params: [c.tx.hash],
+      })),
+    );
+    const txs: DetectedTx[] = [];
+    candidates.forEach((c, i) => {
+      const receipt = receipts[i];
+      if (!receipt || BigInt(receipt.status ?? 0) !== 1n) return; // 실패 tx 제외
+      txs.push({
+        txHash: String(c.tx.hash),
+        fromAddress: c.tx.from ? String(c.tx.from).toLowerCase() : undefined,
+        toAddress: c.tx.to ? String(c.tx.to).toLowerCase() : undefined,
+        amount: BigInt(c.tx.value).toString(),
+        blockNumber: c.blockNumber,
+        txIndex: 0, // 네이티브 전송은 tx 자체가 1건 → 위치 0
+        raw: c.tx,
+      });
+    });
+
     this.logger.log(
-      `scanned blocks ${from}~${to} @ ${this.networkName} → ${txs.length} tx`,
+      `scanned blocks ${from}~${to} @ ${this.networkName} (safeHead=${safeHead}) → ${txs.length} tx`,
     );
     return { txs, nextCursor: String(to) };
   }

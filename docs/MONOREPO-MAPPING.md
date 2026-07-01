@@ -92,6 +92,16 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - prototype: `DetectedTx.txIndex`/`InsertParams.txIndex` + 스캐너 채움 + stub repo `(assetId,txId,txIndex)` Set dedup.
    - monorepo: `tx_index` 컬럼 + UNIQUE `(asset_id, tx_id, tx_index)` migration + 스캐너 채움 + insert 중복 무시. **DB=MySQL 이라 PostgreSQL `ON CONFLICT DO NOTHING` 대신 TypeORM `.orIgnore()` 사용(동작 동일)**.
 
+11. **입금 감지 semantic (scanBlocks ↔ scanTransactions 정합)** — monorepo 기존 `scanBlocks`(입금 감지)와 prototype `scanTransactions` 는 뼈대 같음(블록범위 훑어 감지). 합의된 semantic:
+   - **정확도 필터 = blockchain 층**: EVM 네이티브 = `getBlock(n,true)`(hydrated)로 후보(from/to 매칭 + `value>0`) 거른 뒤 **매칭 tx 만 `getTransactionReceipt` → `status===1`** (2-phase, `getTransaction` 불필요; revert 시 값 안 움직여 status 필수). EVM 토큰 = **revert tx 로그는 `eth_getLogs` 에 안 나옴(로그 존재=성공)** → receipt 불필요, `data≠0`(0금액) 필터만.
+   - **confirmations = endBlock 캡**: `to=min(from+range-1, head-confirmations)`(스냅샷 저장 X). `getConfirmations(path)`(ParamStore, 미설정 0).
+   - **tx_index = `log.logIndex`(결정적)**. ⚠️ monorepo 토큰 scanBlocks 의 0-based 카운터(`buildUpAddressToTransactions`)는 `Promise.all(assetIds)` **공유 카운터라 멀티토큰 tx 에서 재스캔 시 값이 흔들려 멱등 깨질 위험** → **logIndex 로 교체 권장**.
+   - **금액 = raw 최소단위(blockchain), scale 은 tx-scanner**. **from/to**(in/out 의미부여 X, §8).
+   - **반환 = flat `DetectedTx[]`**(prototype). monorepo grouped `{[assetId]:{[toAddress]:[]}}` 는 동등·표기차.
+   - **성능**: batch+병렬 — prototype `ethereum-common/evm-batch.ts`(`jsonRpcBatch`: JSON-RPC 배열 + 청크 Promise.all), monorepo `usingBatchRequest`/`getBlocks`/`getTransactionsByBatch`. ✅ 개념 일치.
+   - **prototype 완료**(2026-07-01, EVM native+token). 다른 체인(UTXO=value>0, 그 외)은 같은 원칙 확장 **TODO(양쪽)**.
+   - **monorepo TODO**: (1) 토큰 tx_index 0-based→**logIndex**(멱등 안전), (2) confirmations 스냅샷→**endBlock 캡**, (3) 토큰 진행지점 `metadataRepository(metadataKey)`→**`wallet_scanner_asset`** 로 일원화.
+
 **주의/약속:**
 - **DB 엔진 차이(monorepo=MySQL)**: 이 문서의 SQL 표기는 PostgreSQL 편의상 `ON CONFLICT DO NOTHING` 로 적지만, **monorepo 는 MySQL** 이라 실제로는 TypeORM `.orIgnore()`(= `INSERT IGNORE`)로 읽는다(동작 동일). unique index/DDL 문법도 MySQL 기준으로 옮길 것.
 - **SOL/SPL 통합 러너(예약, ✅ 양쪽 분리 일치)**: EVM 은 감지 RPC 가 달라(native=블록/receipt, erc20=getLogs) 코인/토큰 분리가 필연이지만, **SOL/SPL 은 감지 방식이 같다**(signature→`getParsedTransaction`, 한 tx 에 native+SPL delta 동시)서 한 루프로 합칠 여지가 있다(`ScanTarget` both-set 예약). **현재 양쪽 다 SOL/SPL 분리 운영(monorepo 확인 완료)** — 통합은 미적용 상태로 둔다. 추후 합칠 경우 선행: (1) getParsedTransaction 파싱, (2) SPL 입금=ATA 서명이라 owner 서명만으론 누락(ATA 열거 필요). 합칠 땐 양쪽 같이.
