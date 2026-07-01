@@ -81,6 +81,7 @@ export class SolService implements AssetService, OnModuleInit {
     }
 
     const limit = this.state.maxDepositScanRange!;
+    const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 
@@ -94,10 +95,25 @@ export class SolService implements AssetService, OnModuleInit {
         newest = sigs[0].signature;
       }
       for (const sig of sigs) {
-        if (sig.err) continue; // 실패 tx 제외(status: err===null 만)
-        // signature 만 수집. from/to·amount 는 getParsedTransaction 파싱 필요(TODO).
+        // getParsedTransaction 으로 fee/status/feePayer 조회(추가 호출). accountKeys[0]=fee payer.
+        const parsed = await connection.getParsedTransaction(sig.signature, {
+          maxSupportedTransactionVersion: 0,
+        });
+        const feePayer = (parsed?.transaction?.message?.accountKeys ??
+          [])[0]?.pubkey?.toString();
+        const isFeePayer = !!feePayer && watch.has(feePayer);
+        const status = sig.err || parsed?.meta?.err ? 0 : 1;
+        if (!isFeePayer && status !== 1) continue; // 실패 & 우리가 낸 fee 아님 → skip
+        // §14: 우리가 fee-payer 면 native SOL fee 행(SPL 전송 fee 도 여기서 잡힘). fee=meta.fee(lamports).
+        const feeAmount =
+          isFeePayer && parsed?.meta?.fee != null
+            ? String(parsed.meta.fee)
+            : undefined;
+        // NOTE: from/to·amount(native delta) 파싱은 여전히 TODO. 현재는 fee/status/signature.
         txs.push({
           txHash: sig.signature,
+          feeAmount,
+          status,
           blockNumber: sig.slot,
           raw: sig,
         });
