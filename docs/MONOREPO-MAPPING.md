@@ -21,7 +21,7 @@
 | 저장 assetId 해석 | 코인=`assetId`. 토큰=token_type 루프가 tx 의 `contractAddress→asset_id`(main.token) 로 분류해 각 토큰 asset_id 로 저장(`saveDetectedTokens`). 토큰 목록은 `TokenRepository`(main.token stub)에서 `token_type → [{assetId, contractAddress}]` | `assetRepository`/`tokenRepository`(main.token) 로 `token_type_id → (asset_id, contractAddress)` 조회 후 tx 의 contractAddress 로 분류 | ✅ 모델 일치(토큰이 자기 asset id, per-tx contractAddress 분류). prototype 은 토큰 목록 stub, monorepo 는 실제 main.token. §5-6/§5-10 참조 |
 | DetectedTx | `{ txHash, fromAddress?, toAddress?, contractAddress?, txIndex?, amount?, memoId?, blockNumber?, raw }` — **in/out 의미부여 안 함**(from/to 만). `txIndex`=tx 내 위치(멱등 키용) | 동일 컨셉 | ✅ 일치. in/out 해석은 저장/조회 단계 |
 | tx 저장 | `TxScannerService.saveDetected` → `DetectedTransactionsRepository.insertDetectedTransactions`(stub). **매퍼/TxRepository 없음**(DetectedTx≈DB 컬럼이라 직접 매핑) | 동명 repository (`main.detected_transactions`) | ✅ InsertParams(fromAddress/toAddress/txId/txIndex/amount/note…) 정렬 |
-| 멱등 | 유니크 키 `(asset_id, tx_id, tx_index)`. stub 은 Set dedup | UNIQUE `(asset_id, tx_id, tx_index)` + ON CONFLICT DO NOTHING | 🔷 prototype 완료, monorepo migration+app 적용 필요(§5-7) |
+| 멱등 | 유니크 키 `(asset_id, tx_id, tx_index)`. stub 은 Set dedup | UNIQUE `(asset_id, tx_id, tx_index)` + TypeORM `.orIgnore()`(MySQL) | ✅ 양쪽 완료(§5-7). 중복 무시 표기만 엔진차(아래 주의) |
 | 스캔 대상(러너) 빌드 | `TxScannerService.onModuleInit` 의 `createAssetRunner`/`createTokenRunner`(인라인). 토큰은 `TokenRepository.getTokensByType` 로 펼침 | **`ScanTargetService`** (`buildTokenScanRunnerConfig`/`getTokenScanTargets` — token_type→main.token 펼침), `TxScannerService` 는 결과로 러너만 생성 | ✅ §6+§10 양쪽 적용 완료(구조는 prototype 인라인 ↔ monorepo 별도 클래스 — 책임 동일) |
 | 워치독 | `TxScannerService.watchdog()` — **`@Cron` 아님**, `setInterval` 로 주기 호출 | `scheduler_manager` 가 watchdog 등록·주기 호출(@Cron 아님) | ✅ 둘 다 @Cron 미사용 |
 | 진행 지점 | `WalletScannerAssetRepository` = `wallet_scanner_asset.start_block_number`(stub) | `wallet.wallet_scanner_asset.start_block_number` (`WalletScannerAssetRepository`), `main.asset` 과 분리 | ✅ 일치. **PK = `id` 단독**(코인=main.asset.id / 토큰=token 자체 asset_id, 한 id 공간·중복 없음), 현재 `start_block_number` 만(컬럼 필요 시 추가) |
@@ -87,14 +87,13 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **부수 정렬(monorepo 버그 수정)**: monorepo 가 토큰 시 지갑 주소를 token asset_id 로 찾던 것을 **기반 체인 `baseAssetId`** 로 조회하도록 수정(prototype 과 동일 — 주소는 기반 체인, 저장·진행지점 키만 토큰 asset_id). ✅ 이제 일치.
    - **EVM 주소 정규화**: contract 주소 비교는 lowercase 로(EVM 체크섬 대응). prototype=EVM `toDetected` 에서 `log.address` lowercase(SPL/TRC20 base58 은 case-sensitive라 건드리지 않음). monorepo=맵 키·tx.contractAddress lowercase + `saveDetectedTokens` lowercase fallback. ✅ 동등.
 
-**🔷 detected_transactions 멱등 (§7 — prototype 구현 완료, monorepo 적용 필요):**
-
-유니크 키 = **`(asset_id, tx_id, tx_index)`**. `tx_index` = tx 내 위치(한 tx 가 동일 transfer 를 여러 건 담을 수 있어 — EVM 배치, UTXO 다중 vout — from/to/amount 가 같아도 구분해야 함). ⚠️ **`tx_index` 없이 `(asset_id, tx_id, from, to[, amount])` 로 걸면 정상 2건을 중복으로 눌러 누락** → 반드시 tx_index 포함.
-- `tx_index` 출처: EVM=`log.logIndex`(블록 단위지만 tx 내 유일 → 충분, 재인덱싱 불필요), UTXO=vout `n`, XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. SOL/SPL=transfer 파싱 전이라 현재 0(signature 단위) — 파싱 들어갈 때 instruction 인덱스로.
-- **prototype 구현 완료**(2026-07-01): `DetectedTx.txIndex`/`InsertParams.txIndex` 추가, 스캐너가 채움(EVM logIndex/UTXO vout/XPLA i), stub repo 가 `(assetId,txId,txIndex)` Set 으로 재삽입 흡수(ON CONFLICT DO NOTHING 시연). 검증: 같은 키 재삽입=skip, 같은 tx·다른 txIndex=별도 저장.
-- **monorepo 적용 필요**: (1) `detected_transactions` 에 `tx_index` 컬럼 + **UNIQUE `(asset_id, tx_id, tx_index)`** migration, (2) 스캐너가 tx_index 채움(EVM logIndex 등), (3) `insertDetectedTransactions` 를 `INSERT … ON CONFLICT (asset_id, tx_id, tx_index) DO NOTHING` 로.
+7. **detected_transactions 멱등 (✅ 양쪽 완료)** — 유니크 키 **`(asset_id, tx_id, tx_index)`**. `tx_index` = tx 내 위치(한 tx 가 동일 transfer 를 여러 건 담을 수 있어 — EVM 배치, UTXO 다중 vout — from/to/amount 가 같아도 구분). ⚠️ tx_index 없이 걸면 정상 2건을 눌러 누락 → 반드시 포함.
+   - `tx_index` 출처: EVM=`log.logIndex`(⚠️ `transactionIndex` 아님; 블록 단위지만 tx 내 유일 → 충분), UTXO=vout `n`, XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. **SOL/SPL·XLM=transfer/op 파싱 전이라 현재 0**(SOL=signature 단위) — 파싱 들어갈 때 instruction/op 인덱스로(양쪽 동일 예정).
+   - prototype: `DetectedTx.txIndex`/`InsertParams.txIndex` + 스캐너 채움 + stub repo `(assetId,txId,txIndex)` Set dedup.
+   - monorepo: `tx_index` 컬럼 + UNIQUE `(asset_id, tx_id, tx_index)` migration + 스캐너 채움 + insert 중복 무시. **DB=MySQL 이라 PostgreSQL `ON CONFLICT DO NOTHING` 대신 TypeORM `.orIgnore()` 사용(동작 동일)**.
 
 **주의/약속:**
+- **DB 엔진 차이(monorepo=MySQL)**: 이 문서의 SQL 표기는 PostgreSQL 편의상 `ON CONFLICT DO NOTHING` 로 적지만, **monorepo 는 MySQL** 이라 실제로는 TypeORM `.orIgnore()`(= `INSERT IGNORE`)로 읽는다(동작 동일). unique index/DDL 문법도 MySQL 기준으로 옮길 것.
 - **SOL/SPL 통합 러너(예약, ✅ 양쪽 분리 일치)**: EVM 은 감지 RPC 가 달라(native=블록/receipt, erc20=getLogs) 코인/토큰 분리가 필연이지만, **SOL/SPL 은 감지 방식이 같다**(signature→`getParsedTransaction`, 한 tx 에 native+SPL delta 동시)서 한 루프로 합칠 여지가 있다(`ScanTarget` both-set 예약). **현재 양쪽 다 SOL/SPL 분리 운영(monorepo 확인 완료)** — 통합은 미적용 상태로 둔다. 추후 합칠 경우 선행: (1) getParsedTransaction 파싱, (2) SPL 입금=ATA 서명이라 owner 서명만으론 누락(ATA 열거 필요). 합칠 땐 양쪽 같이.
 - **DB 트랜잭션 래핑(monorepo 전용)**: monorepo 는 `saveDetected`/`updateStartBlockNumber` 의 DB 쓰기를 `@InjectTransactionRunner(DATASOURCE_WALLET_SHORT_IDLE)` 의 `walletTransactionRunner.runInTransaction(...)` 으로 감싼다. prototype 은 stub repository(실 DB 없음)라 트랜잭션 래핑 없음 — **의도된 발산**(prototype 에 옮기지 않음).
 - **xrp**: prototype 로스터엔 있으나 monorepo `BlockchainService` **미등록**(추후 추가 예정) — 현재 유일한 로스터 차이.
