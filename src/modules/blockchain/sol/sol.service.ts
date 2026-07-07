@@ -28,8 +28,8 @@ interface SolState {
  * 노드: @solana/web3.js Connection (SOLANA_RPC_URL). 노드 핸들은 onModuleInit 에서 초기화.
  * 스캔: 블록 순회가 아니라 **주소별 getSignaturesForAddress 페이징**.
  *   cursor=마지막으로 처리한 signature. {until: cursor} 로 그 이후 신규만 가져온다.
- *
- * NOTE: in/out 방향은 tx 를 parse 해야 정확히 안다(잔고 delta). 현재는 signature 수집까지.
+ *   signature 마다 getParsedTransaction 으로 fee/status + **pre/postBalances delta** 를 파싱해
+ *   from(최대 감소)/to(최대 증가)/amount 를 계산한다(SOL 은 tx 에 금액 필드가 없음).
  */
 @Injectable()
 export class SolService implements AssetService, OnModuleInit {
@@ -95,24 +95,52 @@ export class SolService implements AssetService, OnModuleInit {
         newest = sigs[0].signature;
       }
       for (const sig of sigs) {
-        // getParsedTransaction 으로 fee/status/feePayer 조회(추가 호출). accountKeys[0]=fee payer.
+        // getParsedTransaction 으로 fee/status/feePayer + 잔고 delta 조회(추가 호출).
         const parsed = await connection.getParsedTransaction(sig.signature, {
           maxSupportedTransactionVersion: 0,
         });
-        const feePayer = (parsed?.transaction?.message?.accountKeys ??
-          [])[0]?.pubkey?.toString();
-        const isFeePayer = !!feePayer && watch.has(feePayer);
+        const keys = (parsed?.transaction?.message?.accountKeys ?? []).map(
+          (k: any) => k.pubkey?.toString(),
+        );
+        const isFeePayer = !!keys[0] && watch.has(keys[0]); // accountKeys[0]=fee payer
         const status = sig.err || parsed?.meta?.err ? 0 : 1;
         if (!isFeePayer && status !== 1) continue; // 실패 & 우리가 낸 fee 아님 → skip
-        // §14: 우리가 fee-payer 면 native SOL fee 행(SPL 전송 fee 도 여기서 잡힘). fee=meta.fee(lamports).
-        const feeAmount =
-          isFeePayer && parsed?.meta?.fee != null
-            ? String(parsed.meta.fee)
-            : undefined;
-        // NOTE: from/to·amount(native delta) 파싱은 여전히 TODO. 현재는 fee/status/signature.
+
+        // native 이동은 pre/postBalances 의 계정별 lamports delta 로 계산(SOL 은 금액 필드가 없음).
+        // fee-payer 의 delta 에는 fee 가 섞여 있어 분리. 최대 감소=from, 최대 증가=to/amount.
+        const fee = parsed?.meta?.fee != null ? BigInt(parsed.meta.fee) : 0n;
+        let fromAddress: string | undefined;
+        let toAddress: string | undefined;
+        let amount = 0n;
+        const pre = parsed?.meta?.preBalances;
+        const post = parsed?.meta?.postBalances;
+        if (status === 1 && pre && post) {
+          let minDelta = 0n;
+          keys.forEach((k: string | undefined, i: number) => {
+            if (!k || pre[i] == null || post[i] == null) return;
+            let d = BigInt(post[i]) - BigInt(pre[i]);
+            if (i === 0) d += fee; // fee-payer delta 에서 fee 제외(순수 이동분만)
+            if (d < minDelta) {
+              minDelta = d;
+              fromAddress = k;
+            }
+            if (d > amount) {
+              amount = d;
+              toAddress = k;
+            }
+          });
+        }
+        // §14: fee-payer∈watch 가 아니면(수신) 성공 & 금액>0 만.
+        if (!isFeePayer && amount <= 0n) continue;
         txs.push({
           txHash: sig.signature,
-          feeAmount,
+          fromAddress,
+          toAddress,
+          amount: amount.toString(), // 실패면 0(위에서 미계산)
+          feeAmount:
+            isFeePayer && parsed?.meta?.fee != null
+              ? String(parsed.meta.fee)
+              : undefined,
           status,
           blockNumber: sig.slot,
           raw: sig,

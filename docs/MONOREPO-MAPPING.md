@@ -88,7 +88,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **EVM 주소 정규화**: contract 주소 비교는 lowercase 로(EVM 체크섬 대응). prototype=EVM `toDetected` 에서 `log.address` lowercase(SPL/TRC20 base58 은 case-sensitive라 건드리지 않음). monorepo=맵 키·tx.contractAddress lowercase + `saveDetectedTokens` lowercase fallback. ✅ 동등.
 
 7. **detected_transactions 멱등 (✅ 양쪽 완료)** — 유니크 키 **`(asset_id, tx_id, tx_index)`**. `tx_index` = tx 내 위치(한 tx 가 동일 transfer 를 여러 건 담을 수 있어 — EVM 배치, UTXO 다중 vout — from/to/amount 가 같아도 구분). ⚠️ tx_index 없이 걸면 정상 2건을 눌러 누락 → 반드시 포함.
-   - `tx_index` 출처: EVM=`log.logIndex`(⚠️ `transactionIndex` 아님; 블록 단위지만 tx 내 유일 → 충분), UTXO=vout `n`, XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. **SOL/SPL·XLM=transfer/op 파싱 전이라 현재 0**(SOL=signature 단위) — 파싱 들어갈 때 instruction/op 인덱스로(양쪽 동일 예정).
+   - `tx_index` 출처: EVM=`log.logIndex`(⚠️ `transactionIndex` 아님; 블록 단위지만 tx 내 유일 → 충분), UTXO=vout `n`(fee 행=vout 개수), XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. **SOL/SPL=0 확정**(잔고 delta 는 tx 단위 합산이라 tx당 1행 — §16). XLM 은 op 파싱 전이라 0.
    - prototype: `DetectedTx.txIndex`/`InsertParams.txIndex` + 스캐너 채움 + stub repo `(assetId,txId,txIndex)` Set dedup.
    - monorepo: `tx_index` 컬럼 + UNIQUE `(asset_id, tx_id, tx_index)` migration + 스캐너 채움 + insert 중복 무시. **DB=MySQL 이라 PostgreSQL `ON CONFLICT DO NOTHING` 대신 TypeORM `.orIgnore()` 사용(동작 동일)**.
 
@@ -128,7 +128,10 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **prototype 완료**(2026-07-02): utxo-rpc.client 수신(vout)+출금/fee(vin) + verbosity 3/fallback 분기. rule 1 순수(노드 RPC 만).
     - **monorepo TODO**: 동일하게 vin prevout(verbosity 3 or getrawtransaction) 로 출금·fee. 단 **대규모(BTC)는 `crypto_address_unspents` 로 O(1) 탐지 권장**(아래 개선).
     - **개선사항 — `crypto_address_unspents` 테이블**: vin (txid:n) 이 우리 것인지 DB O(1) 조회(네트워크 콜↓, 캐치업 폭발 방지) + vin 값도 보관해 fee 계산. **유지**: 입금 감지 시 unspent 추가, 출금 감지 시 spent 표시(스캐너가 forward 유지). **백필**: 새로 생성한 주소는 잔고 0에서 시작이라 불필요하나, **이미 잔고 있는 주소를 추가하면 기존 UTXO 일회성 스캐닝/import 필요**(별도 프로비저닝 엔드포인트).
-- **SOL/SPL from/to·amount 파싱**: getParsedTransaction 의 balance delta(native)·tokenBalance delta(SPL) 로 — 현재 SOL 은 fee/status/signature 까지, amount 미파싱(TODO).
+16. **SOL/SPL from/to·amount 파싱 (✅ prototype 완료, monorepo TODO)**. SOL/SPL 은 tx 에 금액 필드가 없어 **getParsedTransaction 의 잔고 delta** 로 계산: SOL=`pre/postBalances` 계정별 lamports delta(fee-payer(accountKeys[0]) delta 는 fee 를 빼고 순수 이동분만), SPL=`pre/postTokenBalances`(해당 mint) **owner 별** delta. **최대 감소=from, 최대 증가=to/amount**(단순 전송 기준 휴리스틱). SPL 0금액(이 mint 이동 없음) skip.
+    - **tx_index=0 유지 확정**: delta 는 tx 단위 합산이라 tx당 1행 — 과거 "파싱 시 instruction 인덱스로 교체" 계획은 폐기(멱등 키 충돌 없음).
+    - 검증: 실 메인넷 3 tx 에서 from/to/amount(lamports)/fee 정확 파싱 확인.
+    - **monorepo TODO**: 동일 적용(SOL native delta+fee 분리, SPL mint 필터 owner delta).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

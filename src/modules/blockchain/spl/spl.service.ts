@@ -23,6 +23,8 @@ interface SplState {
  * 스캔: 소유자 주소가 아니라 **토큰계정(ATA)** 단위로 일어난다.
  *   getParsedTokenAccountsByOwner 로 소유자의 토큰계정을 찾고,
  *   각 토큰계정에 getSignaturesForAddress 페이징. cursor=마지막 signature.
+ *   signature 마다 getParsedTransaction 의 **pre/postTokenBalances(해당 mint) owner 별 delta** 로
+ *   from(감소)/to(증가)/amount 를 계산한다. fee 는 SOL native 행 담당(§14 — 토큰 행엔 없음).
  */
 @Injectable()
 export class SplService implements TokenService, OnModuleInit {
@@ -92,11 +94,48 @@ export class SplService implements TokenService, OnModuleInit {
             newest = sigs[0].signature;
           }
           for (const sig of sigs) {
-            if (sig.err) continue; // 실패 tx 제외(status: err===null 만)
-            // signature 만 수집. from/to·amount 는 getParsedTransaction 파싱 필요(TODO).
+            if (sig.err) continue; // 실패 tx 제외(토큰 안 움직임; fee 는 SOL native 행 담당 §14)
+            // getParsedTransaction 의 pre/postTokenBalances(이 mint)로 owner 별 delta 를 계산해
+            // from(감소)/to(증가)/amount 를 얻는다(SPL 도 tx 에 금액 필드가 없음).
+            const parsed = await connection.getParsedTransaction(
+              sig.signature,
+              { maxSupportedTransactionVersion: 0 },
+            );
+            if (parsed?.meta?.err) continue;
+            const deltaByOwner = new Map<string, bigint>();
+            for (const tb of parsed?.meta?.postTokenBalances ?? []) {
+              if (tb.mint !== contractAddress || !tb.owner) continue;
+              deltaByOwner.set(tb.owner, BigInt(tb.uiTokenAmount.amount));
+            }
+            for (const tb of parsed?.meta?.preTokenBalances ?? []) {
+              if (tb.mint !== contractAddress || !tb.owner) continue;
+              deltaByOwner.set(
+                tb.owner,
+                (deltaByOwner.get(tb.owner) ?? 0n) -
+                  BigInt(tb.uiTokenAmount.amount),
+              );
+            }
+            let fromAddress: string | undefined;
+            let toAddress: string | undefined;
+            let amount = 0n;
+            let minDelta = 0n;
+            for (const [ownerAddr, d] of deltaByOwner) {
+              if (d < minDelta) {
+                minDelta = d;
+                fromAddress = ownerAddr;
+              }
+              if (d > amount) {
+                amount = d;
+                toAddress = ownerAddr;
+              }
+            }
+            if (amount <= 0n) continue; // 이 mint 의 이동 없음(0금액) → skip
             txs.push({
               txHash: sig.signature,
+              fromAddress,
+              toAddress,
               contractAddress,
+              amount: amount.toString(),
               blockNumber: sig.slot,
               raw: sig,
             });
