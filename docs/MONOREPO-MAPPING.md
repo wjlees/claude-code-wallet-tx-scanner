@@ -132,6 +132,30 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **tx_index=0 유지 확정**: delta 는 tx 단위 합산이라 tx당 1행 — 과거 "파싱 시 instruction 인덱스로 교체" 계획은 폐기(멱등 키 충돌 없음).
     - 검증: 실 메인넷 3 tx 에서 from/to/amount(lamports)/fee 정확 파싱 확인.
     - **monorepo TODO**: 동일 적용(SOL native delta+fee 분리, SPL mint 필터 owner delta).
+17. **UTXO 원장 테이블 `crypto_address_unspents`(wallet DB) — prototype stub 완료, monorepo 테이블 생성 필요**. 감시 주소들의 모든 UTXO 를 wallet DB 에 원장으로 유지(main DB 의 동명 테이블과 같은 개념, 스캐너 관점). 용도: (1) **UTXO 잔고** = `SUM(amount) WHERE usable=1`(노드 RPC 로는 불가 — 주소 인덱스 없음), (2) **vin O(1) 출금 탐지**(대규모 체인에서 prevout 해소 대체 최적화), (3) 출금 시스템 vin 조합 재료.
+    - **DDL(MySQL)**:
+      ```sql
+      CREATE TABLE crypto_address_unspents (
+        id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        asset_id           INT NOT NULL,                -- wallet_scanner_asset.id (BTC/BCH …)
+        address            VARCHAR(128) NOT NULL,       -- UTXO 소유(수신) 주소
+        tx_id              VARCHAR(64) NOT NULL,        -- UTXO 생성 tx
+        tx_index           INT NOT NULL,                -- vout n (detected_transactions.tx_index 와 동일 어휘)
+        amount             BIGINT UNSIGNED NOT NULL,    -- 사토시(8자리 정수)
+        usable             TINYINT(1) NOT NULL DEFAULT 1, -- 1=사용가능, 0=소비/예약
+        block_number       BIGINT NULL,                 -- 생성 블록 높이
+        spent_tx_id        VARCHAR(64) NULL,            -- 소비 tx (usable=0 시)
+        spent_block_number BIGINT NULL,
+        created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY ux_unspent (asset_id, tx_id, tx_index),
+        KEY ix_addr_usable (asset_id, address, usable)
+      );
+      ```
+    - **유지(스캐너 forward)**: 수신 감지(vout∈watch) → INSERT usable=1(유니크로 재스캔 멱등). 소비 감지(vin=우리 outpoint) → usable=0 + spent_tx_id/spent_block_number(미존재 outpoint 는 무시 — 백필 전 과거분). ⚠️ usable 은 출금 시스템이 tx 조합 시 **예약(0)** 용도로도 쓸 수 있음 — 스캐너의 확정 소비 마킹과 의미 구분 필요하면 컬럼 분리(status enum) 검토.
+    - **백필(이미 잔고 있는 주소 추가 시)**: **`scantxoutset "start" ["addr(...)"]`**(Core 0.17+)로 현재 살아있는 UTXO 전부 일회 조회(UTXO set 만 스캔 — txindex 불필요, 수십초~수분) → INSERT. 노드 미지원 시 외부 인덱서(Electrum/Esplora) 사용. **블록 1~latest 재스캔은 비현실적(BTC 80만+ 블록) — 만들지 말 것.** 새로 생성한 주소는 잔고 0에서 시작이라 백필 불필요. 일회성 프로비저닝 엔드포인트로(스캐너 루프와 분리).
+    - **prototype 완료**(2026-07-02): `UnspentsRepository`(stub, insert/markSpent/sumUsable) + `DetectedTx.utxo{created, spentOutpoints}`(UTXO 스캐너가 채움) + tx-scanner `maintainUnspents`(수신=INSERT, 소비=markSpent) + 백필용 `UtxoRpcClient.scanTxOutset`/`UtxoCommonService.listLiveUtxos`. UTXO getBalance 는 테이블 SUM 이 정답(blockchain 층 미제공 — rule 1).
+    - **monorepo TODO**: 테이블 생성(migration, 위 DDL) + 스캐너 유지 로직 + 백필 프로비저닝 엔드포인트(scantxoutset).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

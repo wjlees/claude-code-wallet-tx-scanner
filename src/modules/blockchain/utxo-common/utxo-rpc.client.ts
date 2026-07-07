@@ -68,20 +68,29 @@ export class UtxoRpcClient {
     return new BigNumber(btc).shiftedBy(8).toFixed(0);
   }
 
-  /** tx 의 vin prevout(주소·값)을 해소. inline(v3) 이면 vin.prevout, 아니면 getrawtransaction. */
+  /** tx 의 vin prevout(주소·값·outpoint)을 해소. inline(v3) 이면 vin.prevout, 아니면 getrawtransaction. */
   private async resolveVins(
     tx: any,
     prevoutInline: boolean,
-  ): Promise<{ address?: string; value: number }[]> {
-    const out: { address?: string; value: number }[] = [];
+  ): Promise<
+    { address?: string; value: number; txId: string; txIndex: number }[]
+  > {
+    const out: {
+      address?: string;
+      value: number;
+      txId: string;
+      txIndex: number;
+    }[] = [];
     for (const vin of tx.vin ?? []) {
       if (vin.coinbase) continue; // 코인베이스는 prevout 없음
+      const outpoint = { txId: vin.txid, txIndex: vin.vout };
       if (prevoutInline) {
         const p = vin.prevout;
         if (!p) continue;
         out.push({
           address: this.outAddrs(p.scriptPubKey)[0],
           value: Number(p.value),
+          ...outpoint,
         });
       } else {
         const prev = await this.rpc<any>('getrawtransaction', [vin.txid, true]);
@@ -90,10 +99,40 @@ export class UtxoRpcClient {
         out.push({
           address: this.outAddrs(pv.scriptPubKey)[0],
           value: Number(pv.value),
+          ...outpoint,
         });
       }
     }
     return out;
+  }
+
+  /**
+   * 백필용: 주소들의 **현재 살아있는 UTXO 전부**를 UTXO set 스캔으로 조회
+   * (`scantxoutset`, Core 0.17+; txindex 불필요, 수십초~수분 소요 — 일회성 프로비저닝 용도).
+   * 이미 잔고 있는 주소를 감시 목록에 추가할 때 unspents 테이블 초기 적재(§17)에 쓴다.
+   * 노드 미지원 시 throw → 외부 인덱서(Electrum/Esplora) 등 대체 필요.
+   */
+  async scanTxOutset(addresses: string[]): Promise<
+    {
+      txId: string;
+      txIndex: number;
+      address: string;
+      amountSat: string;
+      height: number;
+    }[]
+  > {
+    const result = await this.rpc<any>('scantxoutset', [
+      'start',
+      addresses.map((a) => `addr(${a})`),
+    ]);
+    return (result?.unspents ?? []).map((u: any) => ({
+      txId: u.txid,
+      txIndex: u.vout,
+      // desc 에서 주소 복원이 번거로우므로 단일 주소 스캔이 아니면 scriptPubKey 매칭 필요 — 여기선 desc 기반 best-effort.
+      address: String(u.desc ?? '').replace(/^addr\((.*)\)#.*$/, '$1'),
+      amountSat: this.toSat(u.amount),
+      height: Number(u.height ?? 0),
+    }));
   }
 
   /** from..to 블록을 스캔: 수신(vout∈watch) + 출금/fee(vin∈watch, §14) 를 반환. */
@@ -130,6 +169,7 @@ export class UtxoRpcClient {
               blockNumber: height,
               txIndex: vout.n,
               status: 1, // 블록 포함 = 유효
+              utxo: { created: true }, // 우리 UTXO 생성 → unspents INSERT(§17)
               raw: tx,
             });
           }
@@ -153,12 +193,10 @@ export class UtxoRpcClient {
                 !this.outAddrs(o.scriptPubKey).some((a) => watch.has(a)),
             )
             .reduce((s: BN, o: any) => s.plus(o.value || 0), new BigNumber(0));
-          const fromAddr = vins.find(
-            (v) => v.address && watch.has(v.address),
-          )?.address;
+          const ourVins = vins.filter((v) => v.address && watch.has(v.address));
           txs.push({
             txHash: tx.txid,
-            fromAddress: fromAddr,
+            fromAddress: ourVins[0]?.address,
             amount: this.toSat(sentOut),
             // fee 는 모든 vin 이 해소돼 inSum≥outSum 일 때만(부분 해소 시 음수→생략).
             feeAmount: fee.gte(0) ? this.toSat(fee) : undefined,
@@ -166,6 +204,13 @@ export class UtxoRpcClient {
             blockNumber: height,
             // vout 인덱스(0..n-1)와 겹치지 않게 vout 개수를 fee 행 tx_index 로.
             txIndex: (tx.vout ?? []).length,
+            // 이 tx 가 소비한 우리 outpoint 들 → unspents usable=0 처리(§17).
+            utxo: {
+              spentOutpoints: ourVins.map((v) => ({
+                txId: v.txId,
+                txIndex: v.txIndex,
+              })),
+            },
             raw: tx,
           });
         }

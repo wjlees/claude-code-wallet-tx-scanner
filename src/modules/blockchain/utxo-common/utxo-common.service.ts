@@ -81,10 +81,24 @@ export class UtxoCommonService {
   }
 
   async getBalance(cfg: UtxoAssetConfig, address: string): Promise<string> {
-    // TODO(RPC): watch-only 지갑 잔고 또는 인덱서 사용. 현재는 노드 유무만 점검.
+    // NOTE: UTXO 잔고는 노드 RPC 로 어려움(주소 인덱스 없음) → **unspents 테이블(§17) SUM(usable=1)**
+    //   이 정답(tx-scanner 측 UnspentsRepository.sumUsable). blockchain 층에선 미제공(rule 1).
     if (!(await this.client(cfg))) return '0';
-    this.logger.log(`[${cfg.symbol}] getBalance(${address})`);
+    this.logger.log(
+      `[${cfg.symbol}] getBalance(${address}) — unspents 테이블에서 조회할 것(§17)`,
+    );
     return '0';
+  }
+
+  /**
+   * 백필: 주소들의 살아있는 UTXO 전부를 UTXO set 스캔(`scantxoutset`)으로 조회.
+   * 이미 잔고 있는 주소를 감시 목록에 추가할 때 unspents 초기 적재용(일회성 프로비저닝, §17).
+   * 노드 미지원 시 throw — 인덱서 등 대체 필요.
+   */
+  async listLiveUtxos(cfg: UtxoAssetConfig, addresses: string[]) {
+    const client = await this.client(cfg);
+    if (!client) return [];
+    return client.scanTxOutset(addresses);
   }
 
   async getBlockHeight(cfg: UtxoAssetConfig): Promise<number> {

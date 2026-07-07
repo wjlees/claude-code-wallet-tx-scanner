@@ -25,6 +25,7 @@ import {
   TokenRepository,
   TokenRow,
 } from './token.repository';
+import { UNSPENTS_REPOSITORY, UnspentsRepository } from './unspents.repository';
 import { ScanRunner } from './scan-runner';
 
 /** 워치독 점검 주기(ms). */
@@ -57,6 +58,8 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     private readonly scannerAssetRepository: WalletScannerAssetRepository,
     @Inject(TOKEN_REPOSITORY)
     private readonly tokenRepository: TokenRepository,
+    @Inject(UNSPENTS_REPOSITORY)
+    private readonly unspentsRepository: UnspentsRepository,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -192,6 +195,37 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     for (const tx of txs) {
       await this.detectedRepository.insertDetectedTransactions(
         this.toInsertParams(assetId, rawDecimal, tx, rawDecimal),
+      );
+      await this.maintainUnspents(assetId, tx);
+    }
+  }
+
+  /**
+   * UTXO 원장(crypto_address_unspents, §17) 유지 — UTXO 계열 행에만 부가정보(utxo)가 있다.
+   * 수신(created): UTXO INSERT(usable=1). 소비(spentOutpoints): usable=0 + spent_tx_id.
+   * (재스캔은 유니크 키/미존재 무시로 멱등.)
+   */
+  private async maintainUnspents(
+    assetId: number,
+    tx: DetectedTx,
+  ): Promise<void> {
+    if (!tx.utxo) return;
+    if (tx.utxo.created && tx.toAddress && tx.amount != null) {
+      await this.unspentsRepository.insertUnspent({
+        assetId,
+        address: tx.toAddress,
+        txId: tx.txHash,
+        txIndex: tx.txIndex ?? 0,
+        amount: tx.amount, // UTXO 는 blockchain 층에서 이미 satoshi 정수
+        blockNumber: tx.blockNumber,
+      });
+    }
+    if (tx.utxo.spentOutpoints?.length) {
+      await this.unspentsRepository.markSpent(
+        assetId,
+        tx.utxo.spentOutpoints,
+        tx.txHash,
+        tx.blockNumber,
       );
     }
   }

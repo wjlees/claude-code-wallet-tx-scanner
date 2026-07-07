@@ -43,6 +43,15 @@ export interface DetectedTx {
   feeAmount?: string;
   /** tx 성공 여부 (1=성공, 0=실패). 미설정이면 성공(1) 취급. 실패 tx 도 fee 소모 시 기록(§14). */
   status?: number;
+  /**
+   * UTXO 전용 부가정보 — tx-scanner 가 unspents 테이블(§17) 유지에 사용.
+   * 수신 행: `created=true`(이 vout 이 우리 UTXO 로 생성 — 주소/인덱스/금액은 toAddress/txIndex/amount).
+   * 출금 행: `spentOutpoints`(이 tx 가 소비한 우리 outpoint 들 → usable=0 처리).
+   */
+  utxo?: {
+    created?: boolean;
+    spentOutpoints?: { txId: string; txIndex: number }[];
+  };
   /** 입금 식별용 memoId/DestinationTag 등 */
   memoId?: string;
   /** 블록번호 / ledger index 등 (있으면) */
