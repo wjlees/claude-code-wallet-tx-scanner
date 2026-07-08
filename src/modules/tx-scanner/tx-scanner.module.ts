@@ -35,7 +35,7 @@ import { TxScannerService } from './tx-scanner.service';
       provide: TOKEN_REPOSITORY,
       useClass: StubTokenRepository,
     },
-    // UTXO 원장(crypto_address_unspents, §17) 저장소(현재 in-memory stub).
+    // UTXO 원장(wallet_scanner_unspents, §17) 저장소(현재 in-memory stub).
     {
       provide: UNSPENTS_REPOSITORY,
       useClass: StubUnspentsRepository,

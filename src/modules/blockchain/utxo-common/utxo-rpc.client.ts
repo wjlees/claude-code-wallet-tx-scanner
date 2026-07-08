@@ -15,7 +15,7 @@ type BN = InstanceType<typeof BigNumber>;
  *    native fee 행 기록(§14). vin 은 prevout 값·주소가 필요:
  *    · `prevoutInline`(getblock verbosity 3, Core 25+): 블록 응답의 `vin.prevout` 인라인(추가 콜 0).
  *    · 미지원: vin 마다 `getrawtransaction` 으로 prevout 조회(fallback; 저볼륨 체인용).
- *  NOTE: 대규모 체인에서 fallback 은 무거움 → 실제로는 `crypto_address_unspents` 테이블 권장(개선사항).
+ *  NOTE: 대규모 체인에서 fallback 은 무거움 → 실제로는 `wallet_scanner_unspents` 테이블 권장(개선사항).
  *  NOTE: 우리에게 돌아오는 change vout 도 '수신'으로 잡힘(change 판별은 별도 검토).
  */
 export class UtxoRpcClient {

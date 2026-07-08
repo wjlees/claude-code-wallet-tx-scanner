@@ -201,7 +201,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * UTXO 원장(crypto_address_unspents, §17) 유지 — UTXO 계열 행에만 부가정보(utxo)가 있다.
+   * UTXO 원장(wallet_scanner_unspents, §17) 유지 — UTXO 계열 행에만 부가정보(utxo)가 있다.
    * 수신(created): UTXO INSERT(usable=1). 소비(spentOutpoints): usable=0 + spent_tx_id.
    * (재스캔은 유니크 키/미존재 무시로 멱등.)
    */

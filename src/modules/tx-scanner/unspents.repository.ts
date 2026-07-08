@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BigNumber } from 'bignumber.js';
 
 /**
- * `crypto_address_unspents`(wallet DB) 테이블 1행 — 감시 주소들의 UTXO 원장(§17).
+ * `wallet_scanner_unspents`(wallet DB) 테이블 1행 — 감시 주소들의 UTXO 원장(§17).
  *
  * 스캐너가 forward 로 유지한다: 수신(vout∈watch) 감지 → INSERT(usable=1),
  * 소비(vin=우리 outpoint) 감지 → usable=0 + spent_tx_id. 이 테이블로
@@ -33,7 +33,7 @@ export interface UnspentRow {
 }
 
 /**
- * unspents 저장소. 실제 구현(wallet DB `crypto_address_unspents`)은 monorepo 전용 — prototype 은 stub.
+ * unspents 저장소. 실제 구현(wallet DB `wallet_scanner_unspents`)은 monorepo 전용 — prototype 은 stub.
  * INSERT 는 `(asset_id, tx_id, tx_index)` 유니크로 멱등(재스캔 흡수).
  */
 export interface UnspentsRepository {
@@ -52,7 +52,7 @@ export interface UnspentsRepository {
 
 export const UNSPENTS_REPOSITORY = 'UnspentsRepository';
 
-/** in-memory stub (DB 미연결). 실제로는 crypto_address_unspents INSERT/UPDATE/SUM. */
+/** in-memory stub (DB 미연결). 실제로는 wallet_scanner_unspents INSERT/UPDATE/SUM. */
 @Injectable()
 export class StubUnspentsRepository implements UnspentsRepository {
   private readonly logger = new Logger('UnspentsRepository');

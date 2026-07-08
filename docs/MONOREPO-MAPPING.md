@@ -101,41 +101,41 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **성능**: **`usingBatchRequest` 플래그로 batch/promise 선택**. prototype=`EthereumBasedAssetType.usingBatchRequest` → `EthereumCommonService.getBlocks`/`getReceipts`(true=JSON-RPC 배열 batch 청크 병렬, false=web3 개별 Promise.all). (scanBlocks 의 `blockRangeToScanedTxsByBatch/ByPromise` 와 같은 개념 — scanTransactions 에도 동일 적용.)
    - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, EVM native+token). monorepo 발산: range path=base asset path(klay 등)에서 읽고 confirmationThreshold=token path(kip7 등) — prototype 은 둘 다 token path. (기능 동일, path 소스만 차이.)
 
-12. **입금 감지 semantic 비-EVM 확장 (§11 을 나머지 체인 `scanTransactions` 로) — prototype 완료, monorepo TODO)**. 체인별 성공 지표·확정 방식:
+12. **입금 감지 semantic 비-EVM 확장 (§11 을 나머지 체인 `scanTransactions` 로) (✅ 양쪽 완료)**. 체인별 성공 지표·확정 방식:
     - confirmations cap(블록높이 기반): BTC/BCH `to=height-confirmations`, TRX/TRC20/XPLA `to=head-confirmations`. 즉시확정(XRP validated / XLM ledger close)은 캡 없음(보통 0). SOL/SPL 은 numeric cap 대신 commitment **`finalized`**.
     - status(성공) 필터(체인별): UTXO=불필요(블록 포함=유효), TRX/TRC20=`ret[0].contractRet==='SUCCESS'`(TRC20 은 call data 디코드라 실패 호출도 잡혀 **필수**), XRP=`meta.TransactionResult==='tesSUCCESS'`, XLM=`successful===true`, XPLA=`tx_response.code===0`, SOL/SPL=`sig.err===null`.
     - value>0: 전 체인 공통(UTXO vout.value, TRX/TRC20 amount, XRP Amount(string drops), XPLA amount). SOL/SPL 은 transfer 파싱 후(현재 signature-only).
     - **✅ 양쪽 완료**(prototype+monorepo 2026-07-01, 전 비-EVM). monorepo 발산: TRC20 은 range=tron path·confirmationThreshold=trc20 path. UTXO 금액은 bitcoind `vout.value`(BTC 소수 문자열) 그대로 — satoshi 환산 아직(§13).
 
-13. **amount·fee 사토시 통일 + raw_amount/raw_fee_amount — prototype 완료, monorepo TODO**. **DB `amount`·`fee_amount` = 사토시(8자리 정수)**: `toSatoshi(raw, rawDecimal)` = `BigNumber(raw).shiftedBy(8-rawDecimal).floor`(버림). 원본은 **`raw_amount`·`raw_fee_amount` 컬럼**에 보존(환산 lossy).
+13. **amount·fee 사토시 통일 + raw_amount/raw_fee_amount (✅ 양쪽 완료)**. **DB `amount`·`fee_amount` = 사토시(8자리 정수)**: `toSatoshi(raw, rawDecimal)` = `BigNumber(raw).shiftedBy(8-rawDecimal).floor`(버림). 원본은 **`raw_amount`·`raw_fee_amount` 컬럼**에 보존(환산 lossy).
     - **amount rawDecimal**: 코인=ParamStore `rawDecimal`(EVM 18/BTC·BCH 8/SOL 9/XLM 7/XRP·TRX·XPLA 6, `AssetService.getRawDecimal()`), 토큰=`main.token.token_decimal`(`TokenRow.rawDecimal`).
     - **fee rawDecimal = 항상 native(base) 자산 scale**(수수료는 base 코인으로 소모). 코인=자기 rawDecimal, **토큰=기반 체인 코인 rawDecimal**. 환산은 tx-scanner `toInsertParams(assetId, rawDecimal, tx, feeRawDecimal)`.
     - blockchain 은 **raw 최소단위 정수** 반환(UTXO=`vout.value` BTC소수→satoshi 정수). 공용 유틸은 `blockchain/crypto-util.ts`(`toSatoshi`, `SATOSHI_DECIMALS`).
-    - **fee 파싱 현황**: EVM 네이티브=gasUsed×effectiveGasPrice(receipt), **XRP=`tx.Fee`, XLM=`fee_charged`, XPLA=`auth_info.fee`(axpla)** 완료. TRX(getTransactionInfo 필요)·UTXO(vin−vout prevout 필요)·SOL/SPL(getParsedTransaction meta.fee 필요)은 추가 fetch/parse 라 **TODO**. 토큰 fee(기반 코인)도 TODO(receipt 미조회).
+    - fee 파싱은 §14(모델)·§15(UTXO)에서 전 체인 완료.
     - **prototype 완료**(2026-07-01): `crypto-util.ts`, ParamStore `getRawDecimal`, `AssetService.getRawDecimal()`, `TokenRow.rawDecimal`, `DetectedTx.feeAmount`, `InsertParams.{rawAmount, feeAmount, rawFeeAmount}`. `bignumber.js` 의존성.
-    - **monorepo TODO**: `detected_transactions` 에 `raw_amount`·`raw_fee_amount` 컬럼 + `scanTransactions` 저장 시 `amount`/`fee_amount`=toSatoshi(raw). **fee 는 base 자산 scale**. 큰 수 BigNumber.
+    - **monorepo 완료**(2026-07-07): migration `raw_amount`/`raw_fee_amount`=**VARCHAR(78)**, 기존 `amount`/`fee_amount`=**DECIMAL(65,0) 유지**(사토시 문자열 저장 충분). `crypto-util.ts`(toSatoshi·parseRawDecimal·SATOSHI_DECIMALS) + `AssetService.getRawDecimal()` + `toInsertParams` 환산. atlas migration 2건 — **루트 h1 은 `atlas migrate hash` 로 갱신 권장**.
 
-14. **fee 모델 = "native 자산 별도 행" (✅ 확정, prototype EVM+XRP/XLM/XPLA 완료, monorepo TODO)**. 수수료는 항상 native 코인이라 **토큰 행엔 fee 안 넣고, 별도 native(코인) 행**(amount=0, fee_amount=gas)으로 기록. 한 tx_id 가 여러 asset_id 행(예: ERC20 전송 → AAA 행(토큰금액,fee null) + ETH 행(amount 0, fee gas)). 유니크 키 `(asset_id, tx_id, tx_index)` 로 공존.
+14. **fee 모델 = "native 자산 별도 행" (✅ 양쪽 완료)**. 수수료는 항상 native 코인이라 **토큰 행엔 fee 안 넣고, 별도 native(코인) 행**(amount=0, fee_amount=gas)으로 기록. 한 tx_id 가 여러 asset_id 행(예: ERC20 전송 → AAA 행(토큰금액,fee null) + ETH 행(amount 0, fee gas)). 유니크 키 `(asset_id, tx_id, tx_index)` 로 공존.
     - **native 스캔 방향별 필터**: `tx.from∈watch`(우리가 originate=fee 소모)면 **value·status 무관 기록**(fee 행; amount=성공 시 value, 실패 시 0), `to∈watch & from∉watch`(수신)이면 value>0 & status===1 만.
     - **실패 tx**: from∈watch 면 `status=0` 로 기록(fee 소모). 실패 token tx 는 로그 없어 getLogs 엔 안 잡히지만 native 스캔의 from∈watch 로 fee 행 생성. `DetectedTx.status`(1/0) 추가, `InsertParams.status`=체인 성공여부.
     - **fee_amount 는 fee-payer∈watch 일 때만**(우리가 낸 것). EVM=tx.from, XRP=tx.Account, XLM=source_account, XPLA=sender(근사).
     - 장점: fee 가 native 행이라 base-coin decimal 배선 불필요. 토큰 fee 별도 처리 불요.
     - **prototype 완료**(2026-07-01): ethereum-common(방향별 필터+status+fee 조건부), XRP/XLM/XPLA fee 조건부. `DetectedTx.status`.
-    - **monorepo TODO**: `scanTransactions` native 스캔을 방향별 필터로(from∈watch=value/status 무관+fee, to∈watch=value>0·status1). fee_amount 는 fee-payer∈watch 일 때만. 실패 tx status=0 기록. 토큰 행엔 fee 안 붙임(native 행이 담당).
+    - **monorepo 완료**(2026-07-07): EVM 방향별+receipt status/fee, TRX(TransferContract 외 originate 도 fee 행, getTransactionInfo — isFrom 일 때만 추가 RPC), SOL(parsed meta.fee, fee-payer=accountKeys[0]), XRP/XLM/XPLA fee-payer∈watch 조건부. 토큰 행 fee 미부착. **XLM 은 Horizon tx 레벨 fee_charged(operation 별 fee-payer 구분 미구현 — 양쪽 동일 best-effort).**
     - **모호점(재검토)**: 양쪽 감시지갑끼리 오가는 tx 의 fee 귀속(fee-payer=from 잠정). **대안(보류)**: 한 tx 1행(`amountFrom/amountTo/rawFrom/rawTo`)? 실패 건 때문에 애매 → **2행이 제일 깔끔**으로 결정(목표=최대한 다 감지·기록, 실패/포워딩 tx 도 기록).
 - **fee_amount 나머지 체인**: **TRX 완료**(getTransactionInfo, TriggerSmartContract originate 도 native fee 행). **SOL 완료**(getParsedTransaction meta.fee/err, fee-payer=accountKeys[0]; SPL 전송 fee 도 SOL native 행). **UTXO 는 아래 15**.
-15. **UTXO fee + 출금(vin) 감지 (✅ prototype 완료, verbosity 3 방식)**. UTXO fee = Σvin − Σvout. vin prevout(값·주소)는 **`getblock` verbosity 3(Core 25+, `vin.prevout` 인라인)** 로 추가 콜 없이 획득 → vin∈watch 면 출금(우리가 fee 냄) → native fee 행(§14). 미지원 노드는 **vin 마다 `getrawtransaction`** fallback. 설정 플래그 `UtxoAssetConfig.prevoutInline`(btc=true, bch=false — EVM usingBatchRequest 개념). fee 행 tx_index=vout 개수(vout 인덱스와 비충돌).
+15. **UTXO fee + 출금(vin) 감지 (✅ 양쪽 완료, verbosity 3 방식)**. UTXO fee = Σvin − Σvout. vin prevout(값·주소)는 **`getblock` verbosity 3(Core 25+, `vin.prevout` 인라인)** 로 추가 콜 없이 획득 → vin∈watch 면 출금(우리가 fee 냄) → native fee 행(§14). 미지원 노드는 **vin 마다 `getrawtransaction`** fallback. 설정 플래그 `UtxoAssetConfig.prevoutInline`(btc=true, bch=false — EVM usingBatchRequest 개념). fee 행 tx_index=vout 개수(vout 인덱스와 비충돌).
     - **prototype 완료**(2026-07-02): utxo-rpc.client 수신(vout)+출금/fee(vin) + verbosity 3/fallback 분기. rule 1 순수(노드 RPC 만).
-    - **monorepo TODO**: 동일하게 vin prevout(verbosity 3 or getrawtransaction) 로 출금·fee. 단 **대규모(BTC)는 `crypto_address_unspents` 로 O(1) 탐지 권장**(아래 개선).
-    - **개선사항 — `crypto_address_unspents` 테이블**: vin (txid:n) 이 우리 것인지 DB O(1) 조회(네트워크 콜↓, 캐치업 폭발 방지) + vin 값도 보관해 fee 계산. **유지**: 입금 감지 시 unspent 추가, 출금 감지 시 spent 표시(스캐너가 forward 유지). **백필**: 새로 생성한 주소는 잔고 0에서 시작이라 불필요하나, **이미 잔고 있는 주소를 추가하면 기존 UTXO 일회성 스캐닝/import 필요**(별도 프로비저닝 엔드포인트).
-16. **SOL/SPL from/to·amount 파싱 (✅ prototype 완료, monorepo TODO)**. SOL/SPL 은 tx 에 금액 필드가 없어 **getParsedTransaction 의 잔고 delta** 로 계산: SOL=`pre/postBalances` 계정별 lamports delta(fee-payer(accountKeys[0]) delta 는 fee 를 빼고 순수 이동분만), SPL=`pre/postTokenBalances`(해당 mint) **owner 별** delta. **최대 감소=from, 최대 증가=to/amount**(단순 전송 기준 휴리스틱). SPL 0금액(이 mint 이동 없음) skip.
+    - **monorepo 완료**(2026-07-07): prevoutInline(btc=true, bch=false) + verbosity 3/fallback + 수신·출금/fee 행 + satoshi 정수화 동일 적용. (대규모(BTC) 캐치업은 §17 테이블 O(1) 탐지로 대체 가능 — 선택 최적화로 남김.)
+    - **개선사항 — `wallet_scanner_unspents` 테이블**: vin (txid:n) 이 우리 것인지 DB O(1) 조회(네트워크 콜↓, 캐치업 폭발 방지) + vin 값도 보관해 fee 계산. **유지**: 입금 감지 시 unspent 추가, 출금 감지 시 spent 표시(스캐너가 forward 유지). **백필**: 새로 생성한 주소는 잔고 0에서 시작이라 불필요하나, **이미 잔고 있는 주소를 추가하면 기존 UTXO 일회성 스캐닝/import 필요**(별도 프로비저닝 엔드포인트).
+16. **SOL/SPL from/to·amount 파싱 (✅ 양쪽 완료)**. SOL/SPL 은 tx 에 금액 필드가 없어 **getParsedTransaction 의 잔고 delta** 로 계산: SOL=`pre/postBalances` 계정별 lamports delta(fee-payer(accountKeys[0]) delta 는 fee 를 빼고 순수 이동분만), SPL=`pre/postTokenBalances`(해당 mint) **owner 별** delta. **최대 감소=from, 최대 증가=to/amount**(단순 전송 기준 휴리스틱). SPL 0금액(이 mint 이동 없음) skip.
     - **tx_index=0 유지 확정**: delta 는 tx 단위 합산이라 tx당 1행 — 과거 "파싱 시 instruction 인덱스로 교체" 계획은 폐기(멱등 키 충돌 없음).
     - 검증: 실 메인넷 3 tx 에서 from/to/amount(lamports)/fee 정확 파싱 확인.
-    - **monorepo TODO**: 동일 적용(SOL native delta+fee 분리, SPL mint 필터 owner delta).
-17. **UTXO 원장 테이블 `crypto_address_unspents`(wallet DB) — prototype stub 완료, monorepo 테이블 생성 필요**. 감시 주소들의 모든 UTXO 를 wallet DB 에 원장으로 유지(main DB 의 동명 테이블과 같은 개념, 스캐너 관점). 용도: (1) **UTXO 잔고** = `SUM(amount) WHERE usable=1`(노드 RPC 로는 불가 — 주소 인덱스 없음), (2) **vin O(1) 출금 탐지**(대규모 체인에서 prevout 해소 대체 최적화), (3) 출금 시스템 vin 조합 재료.
+    - **monorepo 완료**(2026-07-07): SOL pre/postBalances delta+fee 분리, SPL mint 필터 owner delta, tx_index=0.
+17. **UTXO 원장 테이블 `wallet_scanner_unspents`(wallet DB) (✅ 양쪽 완료 — 백필 엔드포인트만 잔여)**. 감시 주소들의 모든 UTXO 를 wallet DB 에 원장으로 유지. ⚠️ 테이블명 최종 **`wallet_scanner_unspents`** — main DB 의 `crypto_address_unspents`(출금 레거시, outputIndex 등)와 **별개 테이블로 분리 유지**(monorepo 의 기존 `CryptoAddressUnspents` 엔티티는 그대로 둠). 용도: (1) **UTXO 잔고** = `SUM(amount) WHERE usable=1`(노드 RPC 로는 불가 — 주소 인덱스 없음), (2) **vin O(1) 출금 탐지**(대규모 체인에서 prevout 해소 대체 최적화), (3) 출금 시스템 vin 조합 재료.
     - **DDL(MySQL)**:
       ```sql
-      CREATE TABLE crypto_address_unspents (
+      CREATE TABLE wallet_scanner_unspents (
         id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         asset_id           INT NOT NULL,                -- wallet_scanner_asset.id (BTC/BCH …)
         address            VARCHAR(128) NOT NULL,       -- UTXO 소유(수신) 주소
@@ -155,7 +155,9 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **유지(스캐너 forward)**: 수신 감지(vout∈watch) → INSERT usable=1(유니크로 재스캔 멱등). 소비 감지(vin=우리 outpoint) → usable=0 + spent_tx_id/spent_block_number(미존재 outpoint 는 무시 — 백필 전 과거분). ⚠️ usable 은 출금 시스템이 tx 조합 시 **예약(0)** 용도로도 쓸 수 있음 — 스캐너의 확정 소비 마킹과 의미 구분 필요하면 컬럼 분리(status enum) 검토.
     - **백필(이미 잔고 있는 주소 추가 시)**: **`scantxoutset "start" ["addr(...)"]`**(Core 0.17+)로 현재 살아있는 UTXO 전부 일회 조회(UTXO set 만 스캔 — txindex 불필요, 수십초~수분) → INSERT. 노드 미지원 시 외부 인덱서(Electrum/Esplora) 사용. **블록 1~latest 재스캔은 비현실적(BTC 80만+ 블록) — 만들지 말 것.** 새로 생성한 주소는 잔고 0에서 시작이라 백필 불필요. 일회성 프로비저닝 엔드포인트로(스캐너 루프와 분리).
     - **prototype 완료**(2026-07-02): `UnspentsRepository`(stub, insert/markSpent/sumUsable) + `DetectedTx.utxo{created, spentOutpoints}`(UTXO 스캐너가 채움) + tx-scanner `maintainUnspents`(수신=INSERT, 소비=markSpent) + 백필용 `UtxoRpcClient.scanTxOutset`/`UtxoCommonService.listLiveUtxos`. UTXO getBalance 는 테이블 SUM 이 정답(blockchain 층 미제공 — rule 1).
-    - **monorepo TODO**: 테이블 생성(migration, 위 DDL) + 스캐너 유지 로직 + 백필 프로비저닝 엔드포인트(scantxoutset).
+    - **monorepo 완료**(2026-07-07): migration `20260707120001_add-wallet-scanner-unspents.sql` + 엔티티 `WalletScannerUnspents` + `WalletScannerUnspentsRepository`(walletScannerUnspents.repository.ts, insertUnspent/markSpent/sumUsable) + `TxScannerService.maintainUnspents`. amount=BIGINT UNSIGNED(DDL 대로).
+    - **usable 의미(확정)**: 현재 = **스캐너 확정 소비만**(1=미소비, 0=vin 소비 확인+spent_tx_id). 출금 시스템의 예약(soft lock)이 필요해지면 usable 혼용 대신 **status enum(available/reserved/spent) 분리 권장** — 출금 모듈 연동 시 결정(보류 항목).
+    - **잔여(monorepo)**: scantxoutset 백필 **HTTP 프로비저닝 엔드포인트**(listLiveUtxos+INSERT 준비됨, 엔드포인트만 별도 작업).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
