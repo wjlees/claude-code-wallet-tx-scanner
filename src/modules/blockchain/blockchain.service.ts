@@ -10,6 +10,7 @@ import { BchService } from './bch/bch.service';
 import { TrxService } from './trx/trx.service';
 import { XrpService } from './xrp/xrp.service';
 import { XplaService } from './xpla/xpla.service';
+import { SuiService } from './sui/sui.service';
 import { ETHEREUM_TOKEN_COMMON_SERVICES } from './ethereum-token-common/ethereum-token-common.module';
 import { EthereumTokenCommonService } from './ethereum-token-common/ethereum-token-common.service';
 import { SplService } from './spl/spl.service';
@@ -37,6 +38,7 @@ export class BlockchainService {
     trx: TrxService,
     xrp: XrpService,
     xpla: XplaService,
+    sui: SuiService,
     @Inject(ETHEREUM_TOKEN_COMMON_SERVICES)
     ethereumTokenServices: EthereumTokenCommonService[],
     spl: SplService,
@@ -52,6 +54,7 @@ export class BlockchainService {
       trx,
       xrp,
       xpla,
+      sui,
     ]) {
       this.assetServices.set(service.getAssetId(), service);
     }

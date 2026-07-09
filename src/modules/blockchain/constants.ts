@@ -20,6 +20,7 @@ export enum AssetId {
   TRX = 9,
   XRP = 10,
   XPLA = 11,
+  SUI = 12,
 }
 
 /** 토큰 타입 식별 번호 (assetId 와 별개 네임스페이스). */

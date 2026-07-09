@@ -46,6 +46,7 @@
 | trx | ISO_ALPHA3_TRX | `tron` (path≠symbol) |
 | xrp | ISO_ALPHA3_XRP | `xrp` — ⚠️ monorepo 스캐너 **미등록**(추후 추가), prototype 만 스캔 |
 | xpla | ISO_ALPHA3_XPLA | `xpla` |
+| sui | ISO_ALPHA3_SUI | `sui` (rawDecimal=9 MIST, confirmationThreshold=0 — checkpoint 최종) |
 
 **token**
 | symbol | TokenTypeId | path | 기반 |
@@ -57,7 +58,7 @@
 | trc20 | TRC20(17) | `trc20` | TRX |
 
 ## 3. 자산 로스터 ✅ (2026-06-29 일치)
-prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xpla` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
+prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xpla/sui` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
 - ⚠️ **`xrp`: prototype 로스터엔 있으나 monorepo 스캐너/`BlockchainService` 미등록(추후 별도 추가 예정)** — 현재 유일한 로스터 차이.
 - 참고: monorepo wallet fork 에는 ETH/MATIC/WEMIX/FLR/ARBITRUM 등이 더 있으나 tx-scanner 미등록 → 로스터 제외. legacy 출금 전용 모듈(eth/pol/wemix/...)은 ethereum-common/token-common 으로 정리됨.
 
@@ -158,6 +159,13 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **monorepo 완료**(2026-07-07): migration `20260707120001_add-wallet-scanner-unspents.sql` + 엔티티 `WalletScannerUnspents` + `WalletScannerUnspentsRepository`(walletScannerUnspents.repository.ts, insertUnspent/markSpent/sumUsable) + `TxScannerService.maintainUnspents`. amount=BIGINT UNSIGNED(DDL 대로).
     - **usable 의미(확정)**: 현재 = **스캐너 확정 소비만**(1=미소비, 0=vin 소비 확인+spent_tx_id). 출금 시스템의 예약(soft lock)이 필요해지면 usable 혼용 대신 **status enum(available/reserved/spent) 분리 권장** — 출금 모듈 연동 시 결정(보류 항목).
     - **잔여(monorepo)**: scantxoutset 백필 **HTTP 프로비저닝 엔드포인트**(listLiveUtxos+INSERT 준비됨, 엔드포인트만 별도 작업).
+
+18. **SUI 추가 — gRPC 단독 (prototype 완료·라이브 검증, monorepo 는 1차본 수정 필요)**. JSON-RPC 는 2026-07-31 종료(공용 엔드포인트는 7월 중 셧다운). GraphQL 은 fullnode 가 서빙 안 함(인덱서+Postgres 스택) → **bare fullnode = gRPC 만**으로 충분.
+    - **스캔 = forward checkpoint 스캔**: cursor=checkpoint seq. `LedgerService.GetCheckpoint(n)` 의 `transactions[].balanceChanges` 인라인(read mask `transactions.digest/effects/balance_changes`) → 주소별 GraphQL 질의·per-digest 조회 불필요. 범위 RPC(구 getCheckpoints)는 폐지 → **GetCheckpoint 병렬(Promise.all, HTTP/2)**. 구 multiGetTransactionBlocks 대응 = `BatchGetTransactions`(digest 알 때 — 출금 확인용).
+    - **금액/fee**: native delta(최대 감소=from≈fee-payer, 최대 증가=to/amount — SOL 휴리스틱). fee=gasUsed(computation+storage−rebate, **bigint 필드**). §14 방향별 필터 동일. 실패 tx 도 gas 차감이 balance_changes 에 남아 from∈watch 감지 동작.
+    - **라이브 검증(mainnet fullnode.mainnet.sui.io:443)**: 수신 {amount 750000, fee null} / 출금 {amount 104062500, fee 1097880, sender delta=amount+fee 일치}.
+    - **함정(라이브 발견)**: (1) ⚠️ **coinType 은 풀 주소형** `0x000…002::sui::SUI` — `'0x2::sui::SUI'` 비교는 절대 매치 안 됨 → BigInt(주소부)===2n 정규화(`isNativeSui`). (2) ⚠️ getServiceInfo `checkpointHeight` 가 서빙보다 앞설 수 있음(NOT_FOUND) → 실패 checkpoint null 처리 후 **연속 성공 구간까지만** nextCursor 전진. (3) gasUsed 필드는 bigint(문자열 아님). (4) CJS 빌드는 `import()`→require 변환 → Function dynamic import 트릭.
+    - **monorepo 1차본 수정 지시**: GraphQL 제거(scanTransactions 를 checkpoint 스캔으로), coinType 정규화, gasUsed bigint, getTransaction blockNumber=lamportVersion→`checkpoint` 필드, 서빙랙 처리. sui 토큰(coin_type=contractAddress)은 추후 token service(§6 모델).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

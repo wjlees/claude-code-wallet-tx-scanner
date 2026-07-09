@@ -8,6 +8,7 @@ import { BchModule } from './bch/bch.module';
 import { TrxModule } from './trx/trx.module';
 import { XrpModule } from './xrp/xrp.module';
 import { XplaModule } from './xpla/xpla.module';
+import { SuiModule } from './sui/sui.module';
 import { EthereumTokenCommonModule } from './ethereum-token-common/ethereum-token-common.module';
 import { SplModule } from './spl/spl.module';
 import { Trc20Module } from './trc20/trc20.module';
@@ -23,6 +24,7 @@ import { Trc20Module } from './trc20/trc20.module';
     TrxModule,
     XrpModule,
     XplaModule,
+    SuiModule,
     // TokenService 구현 모듈
     EthereumTokenCommonModule,
     SplModule,
