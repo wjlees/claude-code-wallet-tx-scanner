@@ -1,4 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+// ESM 전용 패키지의 타입을 CJS 에서 참조 — resolution-mode attribute(TS 5.3+, monorepo 동일 방식).
+// eslint-disable-next-line prettier/prettier
+import type { SuiGrpcClient } from '@mysten/sui/grpc' with {
+  'resolution-mode': 'import',
+};
 import { ChannelCredentials } from '@grpc/grpc-js';
 import { GrpcTransport } from '@protobuf-ts/grpc-transport';
 import { AssetId } from '../constants';
@@ -39,41 +44,12 @@ const importEsm = new Function('s', 'return import(s)') as (
   s: string,
 ) => Promise<any>;
 
-/**
- * `@mysten/sui/grpc` 의 우리가 쓰는 부분만 구조 타입으로 선언.
- * (tsconfig moduleResolution 이 구식(node10)이라 ESM subpath 의 **타입 임포트도 불가** —
- *  실제 형태는 dist/grpc/*.d.mts 로 검증됨. moduleResolution 을 node16 으로 올리면 제거 가능.)
- */
-interface GasCostSummaryLike {
+/** gRPC GasCostSummary(bigint 필드) → 총 수수료(raw MIST). fee = computation + storage − rebate. */
+function calcGasFee(gasUsed: {
   computationCost?: bigint;
   storageCost?: bigint;
   storageRebate?: bigint;
-}
-interface ExecutedTransactionLike {
-  digest?: string;
-  effects?: { status?: { success?: boolean }; gasUsed?: GasCostSummaryLike };
-  balanceChanges: { address?: string; coinType?: string; amount?: string }[];
-}
-interface SuiGrpcClientLike {
-  ledgerService: {
-    getServiceInfo(
-      req: object,
-    ): PromiseLike<{ response: { checkpointHeight?: bigint } }>;
-    getCheckpoint(req: {
-      checkpointId: { oneofKind: 'sequenceNumber'; sequenceNumber: bigint };
-      readMask?: { paths: string[] };
-    }): PromiseLike<{
-      response: { checkpoint?: { transactions: ExecutedTransactionLike[] } };
-    }>;
-  };
-  getBalance(input: {
-    owner: string;
-    coinType?: string;
-  }): Promise<{ balance: { balance: string } }>;
-}
-
-/** gRPC GasCostSummary(bigint 필드) → 총 수수료(raw MIST). fee = computation + storage − rebate. */
-function calcGasFee(gasUsed: GasCostSummaryLike): bigint {
+}): bigint {
   return (
     (gasUsed.computationCost ?? 0n) +
     (gasUsed.storageCost ?? 0n) -
@@ -84,7 +60,7 @@ function calcGasFee(gasUsed: GasCostSummaryLike): bigint {
 /** 이 인스턴스가 도는 동안 유지하는 런타임 상태. */
 interface SuiState {
   /** onModuleInit 에서 초기화(ESM dynamic import). 노드 미설정이면 undefined(스캔 skip). */
-  grpcClient?: SuiGrpcClientLike;
+  grpcClient?: SuiGrpcClient;
   /** 1회 스캔 checkpoint 수. 미설정이면 핸들 미초기화→스캔 skip. */
   maxDepositScanRange?: number;
   /** checkpoint 는 BFT 최종이라 보통 0. */

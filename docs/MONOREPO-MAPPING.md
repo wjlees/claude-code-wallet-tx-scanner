@@ -160,12 +160,14 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **usable 의미(확정)**: 현재 = **스캐너 확정 소비만**(1=미소비, 0=vin 소비 확인+spent_tx_id). 출금 시스템의 예약(soft lock)이 필요해지면 usable 혼용 대신 **status enum(available/reserved/spent) 분리 권장** — 출금 모듈 연동 시 결정(보류 항목).
     - **잔여(monorepo)**: scantxoutset 백필 **HTTP 프로비저닝 엔드포인트**(listLiveUtxos+INSERT 준비됨, 엔드포인트만 별도 작업).
 
-18. **SUI 추가 — gRPC 단독 (prototype 완료·라이브 검증, monorepo 는 1차본 수정 필요)**. JSON-RPC 는 2026-07-31 종료(공용 엔드포인트는 7월 중 셧다운). GraphQL 은 fullnode 가 서빙 안 함(인덱서+Postgres 스택) → **bare fullnode = gRPC 만**으로 충분.
+18. **SUI 추가 — gRPC 단독 (✅ 양쪽 완료 — prototype 라이브 검증, monorepo 반영 확인)**. JSON-RPC 는 2026-07-31 종료(공용 엔드포인트는 7월 중 셧다운). GraphQL 은 fullnode 가 서빙 안 함(인덱서+Postgres 스택) → **bare fullnode = gRPC 만**으로 충분.
     - **스캔 = forward checkpoint 스캔**: cursor=checkpoint seq. `LedgerService.GetCheckpoint(n)` 의 `transactions[].balanceChanges` 인라인(read mask `transactions.digest/effects/balance_changes`) → 주소별 GraphQL 질의·per-digest 조회 불필요. 범위 RPC(구 getCheckpoints)는 폐지 → **GetCheckpoint 병렬(Promise.all, HTTP/2)**. 구 multiGetTransactionBlocks 대응 = `BatchGetTransactions`(digest 알 때 — 출금 확인용).
     - **금액/fee**: native delta(최대 감소=from≈fee-payer, 최대 증가=to/amount — SOL 휴리스틱). fee=gasUsed(computation+storage−rebate, **bigint 필드**). §14 방향별 필터 동일. 실패 tx 도 gas 차감이 balance_changes 에 남아 from∈watch 감지 동작.
     - **라이브 검증(mainnet fullnode.mainnet.sui.io:443)**: 수신 {amount 750000, fee null} / 출금 {amount 104062500, fee 1097880, sender delta=amount+fee 일치}.
     - **함정(라이브 발견)**: (1) ⚠️ **coinType 은 풀 주소형** `0x000…002::sui::SUI` — `'0x2::sui::SUI'` 비교는 절대 매치 안 됨 → BigInt(주소부)===2n 정규화(`isNativeSui`). (2) ⚠️ getServiceInfo `checkpointHeight` 가 서빙보다 앞설 수 있음(NOT_FOUND) → 실패 checkpoint null 처리 후 **연속 성공 구간까지만** nextCursor 전진. (3) gasUsed 필드는 bigint(문자열 아님). (4) CJS 빌드는 `import()`→require 변환 → Function dynamic import 트릭.
-    - **monorepo 1차본 수정 지시**: GraphQL 제거(scanTransactions 를 checkpoint 스캔으로), coinType 정규화, gasUsed bigint, getTransaction blockNumber=lamportVersion→`checkpoint` 필드, 서빙랙 처리. sui 토큰(coin_type=contractAddress)은 추후 token service(§6 모델).
+    - **monorepo 반영 완료**(2026-07-10): GraphQL 전부 제거, isNativeSui, checkpoint 스캔+서빙랙 처리, calcGasFee(bigint|string), getTransaction=`batchGetTransactions`(read mask `checkpoint`/`effects.gas_used`)·blockNumber=checkpoint. 발산 1건: getTransaction 의 oneof narrowing 이 `!== 'transaction'` 으론 안 좁혀져 **`'transaction' in txResult` 가드** 사용(동작 동일).
+    - **타입 임포트(양쪽 동일 방식 확정)**: ESM 전용 SDK 타입을 CJS 에서 참조할 땐 `import type { SuiGrpcClient } from '@mysten/sui/grpc' with { 'resolution-mode': 'import' }`(TS 5.3+, TS1479 해결). prototype 도 로컬 구조 타입에서 이 방식으로 전환(정합) — 런타임 로드는 여전히 Function dynamic import.
+    - sui 토큰(coin_type=contractAddress)은 추후 token service(§6 모델) — 양쪽 보류.
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
