@@ -1,10 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject } from '@nestjs/common';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
   getRawDecimal,
@@ -43,6 +44,11 @@ export class XplaService implements AssetService, OnModuleInit {
   private readonly logger = new Logger('XplaService');
   private readonly state: XplaState = {};
 
+  constructor(
+    @Inject(ASSET_REPOSITORY)
+    private readonly assetRepository: AssetRepository,
+  ) {}
+
   getAssetId(): number {
     return AssetId.XPLA;
   }
@@ -65,7 +71,7 @@ export class XplaService implements AssetService, OnModuleInit {
     }
     this.state.maxDepositScanRange = range;
     this.state.confirmationThreshold =
-      await getConfirmationThreshold(XPLA_PATH);
+      await this.assetRepository.getConfirmThresholdById(this.getAssetId());
     this.state.rawDecimal = await getRawDecimal(XPLA_PATH);
     this.state.client = new XplaRestClient(url);
     this.logger.log(

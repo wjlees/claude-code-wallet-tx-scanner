@@ -1,4 +1,6 @@
 import { Module, Provider } from '@nestjs/common';
+import { AssetRepositoryModule } from '../asset-repository.module';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import {
   ETHEREUM_COMMON_SERVICES,
   EthereumCommonModule,
@@ -22,15 +24,21 @@ const ethereumTokenCommonServiceTokens = ethereumBasedTokenTypeIds.map(
 const ethereumTokenCommonProviders: Provider[] = ethereumBasedTokenTypeIds.map(
   (tokenTypeId) => ({
     provide: ethereumTokenCommonServiceToken(tokenTypeId),
-    useFactory: (ethereumCommonServices: EthereumCommonService[]) =>
-      new EthereumTokenCommonService(tokenTypeId, ethereumCommonServices),
-    inject: [ETHEREUM_COMMON_SERVICES],
-    // NOTE: 실제 구현에선 ParamStore / TokenRepository / MetadataRepository 등도 inject.
+    useFactory: (
+      ethereumCommonServices: EthereumCommonService[],
+      assetRepository: AssetRepository,
+    ) =>
+      new EthereumTokenCommonService(
+        tokenTypeId,
+        ethereumCommonServices,
+        assetRepository,
+      ),
+    inject: [ETHEREUM_COMMON_SERVICES, ASSET_REPOSITORY],
   }),
 );
 
 @Module({
-  imports: [EthereumCommonModule],
+  imports: [EthereumCommonModule, AssetRepositoryModule],
   providers: [
     ...ethereumTokenCommonProviders,
     {

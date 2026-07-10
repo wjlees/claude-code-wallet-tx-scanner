@@ -1,12 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject } from '@nestjs/common';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { ScanResult } from '../interfaces/scan.types';
-import {
-  getConfirmationThreshold,
-  getMaxDepositScanRange,
-  getRawDecimal,
-} from '../parameter-store';
+import { getMaxDepositScanRange, getRawDecimal } from '../parameter-store';
 import {
   UtxoAssetConfig,
   UtxoCommonService,
@@ -34,7 +32,11 @@ export class BchService implements AssetService, OnModuleInit {
   /** 원본 최소단위 자릿수(BCH=8, UTXO client 가 satoshi 정수로 반환). */
   private rawDecimal = 8;
 
-  constructor(private readonly utxo: UtxoCommonService) {}
+  constructor(
+    private readonly utxo: UtxoCommonService,
+    @Inject(ASSET_REPOSITORY)
+    private readonly assetRepository: AssetRepository,
+  ) {}
 
   /** 노드가 있을 때 scan range 조회. 없으면 log+skip(throw 안 함). */
   async onModuleInit(): Promise<void> {
@@ -49,7 +51,8 @@ export class BchService implements AssetService, OnModuleInit {
       return;
     }
     this.maxDepositScanRange = range;
-    this.confirmationThreshold = await getConfirmationThreshold(this.cfg.path);
+    this.confirmationThreshold =
+      await this.assetRepository.getConfirmThresholdById(this.getAssetId());
     this.rawDecimal = await getRawDecimal(this.cfg.path);
   }
 

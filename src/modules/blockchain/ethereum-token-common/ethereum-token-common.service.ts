@@ -1,12 +1,10 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
+import { AssetRepository } from '../asset.repository';
 import { EthereumCommonService } from '../ethereum-common/ethereum-common.service';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import {
-  getConfirmationThreshold,
-  getMaxDepositScanRange,
-} from '../parameter-store';
+import { getMaxDepositScanRange } from '../parameter-store';
 import {
   EthereumBasedTokenType,
   ethereumBasedTokens,
@@ -48,6 +46,7 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
   constructor(
     private readonly tokenTypeId: number,
     ethereumCommonServices: EthereumCommonService[],
+    private readonly assetRepository: AssetRepository,
   ) {
     const config = ethereumBasedTokens[tokenTypeId];
     const baseAssetService = ethereumCommonServices.find(
@@ -75,9 +74,11 @@ export class EthereumTokenCommonService implements TokenService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmationThreshold = await getConfirmationThreshold(
-      this.state.config.path,
-    );
+    // confirm_threshold 는 기반 체인(baseAssetId) 자산 행 공유
+    this.state.confirmationThreshold =
+      await this.assetRepository.getConfirmThresholdById(
+        this.state.config.baseAssetId,
+      );
   }
 
   getTokenTypeId(): number {

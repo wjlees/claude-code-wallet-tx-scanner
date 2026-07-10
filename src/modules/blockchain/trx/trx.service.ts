@@ -1,11 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { TronWeb } from 'tronweb';
+import { Inject } from '@nestjs/common';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
   getRawDecimal,
@@ -41,6 +42,11 @@ export class TrxService implements AssetService, OnModuleInit {
   private readonly logger = new Logger('TrxService');
   private readonly state: TrxState = {};
 
+  constructor(
+    @Inject(ASSET_REPOSITORY)
+    private readonly assetRepository: AssetRepository,
+  ) {}
+
   getAssetId(): number {
     return AssetId.TRX;
   }
@@ -63,7 +69,7 @@ export class TrxService implements AssetService, OnModuleInit {
     }
     this.state.maxDepositScanRange = range;
     this.state.confirmationThreshold =
-      await getConfirmationThreshold(TRON_PATH);
+      await this.assetRepository.getConfirmThresholdById(this.getAssetId());
     this.state.rawDecimal = await getRawDecimal(TRON_PATH);
     this.state.tronWeb = new TronWeb({ fullHost: url });
     this.logger.log(`tronWeb initialized (maxDepositScanRange=${range})`);

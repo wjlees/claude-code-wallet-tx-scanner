@@ -55,17 +55,6 @@ export async function getMaxDepositScanRange(
 }
 
 /**
- * 스캔 안전 마진(confirmationThreshold). 스캔 끝을 `head - confirmationThreshold` 로 캡해
- * reorg 로 뒤집힐 수 있는 최근 블록을 감지에서 제외한다(감지 tx 는 항상 ≥confirmationThreshold 확정).
- * 미설정이면 **0**(캡 없음). monorepo 의 `confirmationThreshold` 와 같은 개념.
- */
-export async function getConfirmationThreshold(path: string): Promise<number> {
-  const raw = (await getParametersByPath(path)).confirmationThreshold;
-  const n = raw !== undefined ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/**
  * 체인 원본 최소단위의 자릿수(rawDecimal). 금액을 사토시(8자리)로 환산할 때 쓴다.
  * 코인은 체인 상수(EVM=18, BTC/BCH=8, SOL=9, XLM=7, XRP/TRX/XPLA=6). 미설정이면 8(=satoshi, 무변환).
  * (토큰은 이 값 대신 `main.token.token_decimal` 을 쓴다.)

@@ -46,7 +46,7 @@
 | trx | ISO_ALPHA3_TRX | `tron` (path≠symbol) |
 | xrp | ISO_ALPHA3_XRP | `xrp` — ⚠️ monorepo 스캐너 **미등록**(추후 추가), prototype 만 스캔 |
 | xpla | ISO_ALPHA3_XPLA | `xpla` |
-| sui | ISO_ALPHA3_SUI | `sui` (rawDecimal=9 MIST, confirmationThreshold=0 — checkpoint 최종) |
+| sui | ISO_ALPHA3_SUI | `sui` (rawDecimal=9 MIST; confirm_threshold=0(main.asset) — checkpoint 최종) |
 
 **token**
 | symbol | TokenTypeId | path | 기반 |
@@ -166,8 +166,12 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **라이브 검증(mainnet fullnode.mainnet.sui.io:443)**: 수신 {amount 750000, fee null} / 출금 {amount 104062500, fee 1097880, sender delta=amount+fee 일치}.
     - **함정(라이브 발견)**: (1) ⚠️ **coinType 은 풀 주소형** `0x000…002::sui::SUI` — `'0x2::sui::SUI'` 비교는 절대 매치 안 됨 → BigInt(주소부)===2n 정규화(`isNativeSui`). (2) ⚠️ getServiceInfo `checkpointHeight` 가 서빙보다 앞설 수 있음(NOT_FOUND) → 실패 checkpoint null 처리 후 **연속 성공 구간까지만** nextCursor 전진. (3) gasUsed 필드는 bigint(문자열 아님). (4) CJS 빌드는 `import()`→require 변환 → Function dynamic import 트릭.
     - **monorepo 반영 완료**(2026-07-10): GraphQL 전부 제거, isNativeSui, checkpoint 스캔+서빙랙 처리, calcGasFee(bigint|string), getTransaction=`batchGetTransactions`(read mask `checkpoint`/`effects.gas_used`)·blockNumber=checkpoint. 발산 1건: getTransaction 의 oneof narrowing 이 `!== 'transaction'` 으론 안 좁혀져 **`'transaction' in txResult` 가드** 사용(동작 동일).
-    - **타입 임포트(양쪽 동일 방식 확정)**: ESM 전용 SDK 타입을 CJS 에서 참조할 땐 `import type { SuiGrpcClient } from '@mysten/sui/grpc' with { 'resolution-mode': 'import' }`(TS 5.3+, TS1479 해결). prototype 도 로컬 구조 타입에서 이 방식으로 전환(정합) — 런타임 로드는 여전히 Function dynamic import.
+    - **타입 임포트(동등·환경차)**: prototype=`import type … with { 'resolution-mode': 'import' }`(TS 5.9+node10 에서 동작). **monorepo 는 그마저 TS1479** → `@mysten/sui` 타입 참조를 완전히 제거하고 **dynamic import 추론** 사용: `type SuiGrpcClient = Awaited<ReturnType<typeof createSuiGrpcClient>>`(sui.type.ts 의 State 도 @mysten 참조 없음). 런타임 로드는 양쪽 다 dynamic import.
     - sui 토큰(coin_type=contractAddress)은 추후 token service(§6 모델) — 양쪽 보류.
+
+19. **confirmationThreshold 소스: ParamStore → `main.asset.confirm_threshold` (✅ 양쪽 완료)**. 전 자산 적용 — blockchain 서비스가 init 시 **`AssetRepository.getConfirmThresholdById(assetId)`** 로 1회 로드. 코인=자기 assetId(SUI/TRX/XPLA/BTC/BCH/EVM), **토큰=기반 체인 assetId 공유**(TRC20→TRX, EVM 토큰→baseAssetId). ParamStore 의 confirmationThreshold 키는 스캐너/deposit 경로에서 **미사용**(prototype 은 헬퍼·parameter.json 필드 제거).
+    - prototype: `blockchain/asset.repository.ts`(port `ASSET_REPOSITORY`+`StubAssetRepository`) + `asset-repository.module.ts`(8개 체인 모듈이 import, EVM 은 factory inject). **rule 1 예외 명시**: 자산 메타 read 는 blockchain 이 port 로 조회 가능(영속화는 여전히 tx-scanner).
+    - monorepo: `AssetRepository.getConfirmThresholdById` + 각 모듈 `TypeOrmModule.forFeature([Asset])`. deposit 은 `getByIds` 응답의 confirmThreshold 사용(`CryptoParams.confirmationThreshold` 제거).
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

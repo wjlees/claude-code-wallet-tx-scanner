@@ -6,12 +6,13 @@ import type { SuiGrpcClient } from '@mysten/sui/grpc' with {
 };
 import { ChannelCredentials } from '@grpc/grpc-js';
 import { GrpcTransport } from '@protobuf-ts/grpc-transport';
+import { Inject } from '@nestjs/common';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
   getRawDecimal,
@@ -89,6 +90,11 @@ export class SuiService implements AssetService, OnModuleInit {
   private readonly logger = new Logger('SuiService');
   private readonly state: SuiState = {};
 
+  constructor(
+    @Inject(ASSET_REPOSITORY)
+    private readonly assetRepository: AssetRepository,
+  ) {}
+
   getAssetId(): number {
     return AssetId.SUI;
   }
@@ -110,7 +116,8 @@ export class SuiService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmationThreshold = await getConfirmationThreshold(SUI_PATH);
+    this.state.confirmationThreshold =
+      await this.assetRepository.getConfirmThresholdById(this.getAssetId());
     this.state.rawDecimal = await getRawDecimal(SUI_PATH);
 
     // ESM 전용 패키지 → dynamic import(위 트릭)로 로드.

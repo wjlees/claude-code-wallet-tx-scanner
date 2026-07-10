@@ -1,91 +1,75 @@
 {
-  "_comment": "자산별 path 아래 nodeUrl/maxDepositScanRange/confirmationThreshold/rawDecimal. monorepo getParametersByPath(path) 와 동일 모델. maxDepositScanRange 미설정이면 스캔 skip. confirmationThreshold 미설정 0. rawDecimal=체인 원본 최소단위 자릿수(사토시 환산용, 미설정 8).",
+  "_comment": "자산별 path 아래 nodeUrl/maxDepositScanRange/rawDecimal. monorepo getParametersByPath(path) 와 동일 모델. maxDepositScanRange 미설정이면 스캔 skip. rawDecimal=체인 원본 최소단위 자릿수(사토시 환산용, 미설정 8). confirmationThreshold 는 ParamStore 가 아니라 main.asset.confirm_threshold(AssetRepository, §19).",
   "konet": {
     "nodeUrl": "",
     "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12",
     "rawDecimal": "18"
   },
   "klay": {
     "nodeUrl": "",
     "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12",
     "rawDecimal": "18"
   },
   "cross": {
     "nodeUrl": "",
     "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12",
     "rawDecimal": "18"
   },
   "base": {
     "nodeUrl": "",
     "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12",
     "rawDecimal": "18"
   },
   "sol": {
     "nodeUrl": "",
     "maxDepositScanRange": "1000",
-    "confirmationThreshold": "32",
     "rawDecimal": "9"
   },
   "xlm": {
     "nodeUrl": "",
     "maxDepositScanRange": "200",
-    "confirmationThreshold": "1",
     "rawDecimal": "7"
   },
   "btc": {
     "nodeUrl": "http://user:pass@host:8332",
     "maxDepositScanRange": "50",
-    "confirmationThreshold": "3",
     "rawDecimal": "8"
   },
   "bch": {
     "nodeUrl": "http://user:pass@host:8332",
     "maxDepositScanRange": "50",
-    "confirmationThreshold": "6",
     "rawDecimal": "8"
   },
   "tron": {
     "nodeUrl": "https://api.trongrid.io",
     "maxDepositScanRange": "20",
-    "confirmationThreshold": "20",
     "rawDecimal": "6"
   },
   "xrp": {
     "nodeUrl": "https://s1.ripple.com:51234",
     "maxDepositScanRange": "200",
-    "confirmationThreshold": "0",
     "rawDecimal": "6"
   },
   "xpla": {
     "nodeUrl": "https://dimension-lcd.xpla.dev",
     "maxDepositScanRange": "10",
-    "confirmationThreshold": "1",
     "rawDecimal": "6"
   },
   "kip7": {
-    "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12"
+    "maxDepositScanRange": "1000"
   },
   "konetToken": {
-    "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12"
+    "maxDepositScanRange": "1000"
   },
   "baseToken": {
-    "maxDepositScanRange": "1000",
-    "confirmationThreshold": "12"
+    "maxDepositScanRange": "1000"
   },
   "trc20": {
-    "maxDepositScanRange": "20",
-    "confirmationThreshold": "20"
+    "maxDepositScanRange": "20"
   },
   "sui": {
     "nodeUrl": "",
     "maxDepositScanRange": "10",
-    "confirmationThreshold": "0",
     "rawDecimal": "9"
   }
 }

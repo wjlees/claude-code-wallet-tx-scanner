@@ -1,10 +1,10 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import Web3 from 'web3';
+import { AssetRepository } from '../asset.repository';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { warnMissingNode } from '../node-config';
 import {
-  getConfirmationThreshold,
   getMaxDepositScanRange,
   getNodeUrlByPath,
   getRawDecimal,
@@ -60,7 +60,10 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
 
   readonly scanIntervalMs = 10000;
 
-  constructor(private readonly assetId: number) {
+  constructor(
+    private readonly assetId: number,
+    private readonly assetRepository: AssetRepository,
+  ) {
     const config = ethereumBasedAssets[assetId];
     this.state = { config, rawDecimal: DEFAULT_RAW_DECIMAL };
     this.logger = new Logger(`EthereumCommonService:${config.assetName}`);
@@ -81,9 +84,8 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
       return;
     }
     this.state.maxDepositScanRange = range;
-    this.state.confirmationThreshold = await getConfirmationThreshold(
-      this.state.config.path,
-    );
+    this.state.confirmationThreshold =
+      await this.assetRepository.getConfirmThresholdById(this.assetId);
     this.state.rawDecimal = await getRawDecimal(this.state.config.path);
     this.state.nodeUrl = url;
     this.state.web3 = new Web3(url);

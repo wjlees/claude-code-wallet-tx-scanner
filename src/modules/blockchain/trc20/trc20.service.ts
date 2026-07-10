@@ -1,12 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject } from '@nestjs/common';
+import { ASSET_REPOSITORY, AssetRepository } from '../asset.repository';
 import { TokenTypeId } from '../constants';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
 import { TokenService } from '../interfaces/token.interface';
 import { warnMissingNode } from '../node-config';
-import {
-  getConfirmationThreshold,
-  getMaxDepositScanRange,
-} from '../parameter-store';
+import { getMaxDepositScanRange } from '../parameter-store';
 import { TrxService } from '../trx/trx.service';
 
 /** TRC20 transfer(address,uint256) 메서드 셀렉터 */
@@ -31,7 +30,11 @@ export class Trc20Service implements TokenService, OnModuleInit {
   /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). 미설정 0. */
   private confirmationThreshold = 0;
 
-  constructor(private readonly trx: TrxService) {}
+  constructor(
+    private readonly trx: TrxService,
+    @Inject(ASSET_REPOSITORY)
+    private readonly assetRepository: AssetRepository,
+  ) {}
 
   /** 기반 TRX 노드가 있을 때 scan range 조회. 없으면 log+skip. */
   async onModuleInit(): Promise<void> {
@@ -46,7 +49,9 @@ export class Trc20Service implements TokenService, OnModuleInit {
       return;
     }
     this.maxDepositScanRange = range;
-    this.confirmationThreshold = await getConfirmationThreshold(TRC20_PATH);
+    // confirm_threshold 는 기반 체인(TRX) 자산 행 공유
+    this.confirmationThreshold =
+      await this.assetRepository.getConfirmThresholdById(this.trx.getAssetId());
   }
 
   getTokenTypeId(): number {
