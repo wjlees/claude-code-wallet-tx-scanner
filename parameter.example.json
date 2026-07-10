@@ -69,7 +69,7 @@
   },
   "sui": {
     "nodeUrl": "",
-    "maxDepositScanRange": "10",
+    "maxDepositScanRange": "100",
     "rawDecimal": "9"
   }
 }

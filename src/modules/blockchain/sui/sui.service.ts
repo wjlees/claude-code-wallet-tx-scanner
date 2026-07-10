@@ -19,6 +19,8 @@ import {
 } from '../parameter-store';
 
 const SUI_PATH = 'sui';
+/** GetCheckpoint 동시 요청 상한(청크 내 병렬, 청크 간 순차) — 429/노드 과부하 완화. */
+const CHECKPOINT_CHUNK = 25;
 
 /**
  * native SUI coin type 판별. ⚠️ gRPC 응답의 coinType 은 **풀 주소형**
@@ -184,31 +186,44 @@ export class SuiService implements AssetService, OnModuleInit {
     // 범위 RPC 없음(구 getCheckpoints 폐지) → GetCheckpoint 병렬. balance_changes 인라인 요청.
     // ⚠️ getServiceInfo 의 checkpointHeight 가 노드가 실제 서빙하는 것보다 앞설 수 있어(서빙 랙,
     //   라이브 확인) 실패 checkpoint 는 null 처리 후 **연속 성공 구간까지만** 진행(다음 사이클 재시도).
+    // SUI 는 checkpoint 생성이 빠르다(~4.5/s ≈ 45개/10s) → range 는 생성 속도보다 커야
+    // 뒤처지지 않음(권장 100 = 2x 여유). 429/과부하를 피하려고 **청크 단위 병렬**로 요청
+    // (청크 내 Promise.all, 청크 간 순차 — EVM BATCH_CHUNK 와 동일 패턴). 청크에서 실패가
+    // 나오면 이후 청크는 요청하지 않는다(연속 성공 구간 전진이라 어차피 버려짐).
     const seqs: number[] = [];
     for (let n = from; n <= to; n++) seqs.push(n);
-    const results = await Promise.all(
-      seqs.map((n) =>
-        grpcClient.ledgerService
-          .getCheckpoint({
-            checkpointId: {
-              oneofKind: 'sequenceNumber',
-              sequenceNumber: BigInt(n),
-            },
-            readMask: {
-              paths: [
-                'sequence_number',
-                'transactions.digest',
-                'transactions.effects',
-                'transactions.balance_changes',
-              ],
-            },
-          })
-          .then(
-            (r) => r,
-            () => null,
-          ),
-      ),
-    );
+    type CpResult = Awaited<
+      ReturnType<typeof grpcClient.ledgerService.getCheckpoint>
+    >;
+    const results: (CpResult | null)[] = [];
+    for (let i = 0; i < seqs.length; i += CHECKPOINT_CHUNK) {
+      const chunk = seqs.slice(i, i + CHECKPOINT_CHUNK);
+      const part = await Promise.all(
+        chunk.map((n) =>
+          grpcClient.ledgerService
+            .getCheckpoint({
+              checkpointId: {
+                oneofKind: 'sequenceNumber',
+                sequenceNumber: BigInt(n),
+              },
+              readMask: {
+                paths: [
+                  'sequence_number',
+                  'transactions.digest',
+                  'transactions.effects',
+                  'transactions.balance_changes',
+                ],
+              },
+            })
+            .then(
+              (r) => r,
+              () => null,
+            ),
+        ),
+      );
+      results.push(...part);
+      if (part.includes(null)) break; // 실패 발견 → 이후 청크 요청 생략(429/서빙랙 완화)
+    }
     let okCount = results.findIndex((r) => r === null);
     if (okCount === -1) okCount = results.length;
     if (okCount === 0) {
