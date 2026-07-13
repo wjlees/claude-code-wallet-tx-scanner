@@ -82,8 +82,9 @@ interface SuiState {
  *   `LedgerService.GetCheckpoint(n)` 응답의 `transactions[].balanceChanges` 가 인라인이라
  *   주소별 질의·per-digest 조회 불필요. 범위 RPC(구 getCheckpoints)는 gRPC 에 없어
  *   GetCheckpoint 를 **병렬(Promise.all)** 로 요청(HTTP/2 멀티플렉싱).
- * 금액: balance_changes 의 native(0x2::sui::SUI) delta — 최대 감소=from, 최대 증가=to/amount
- *   (SOL delta 와 동일 휴리스틱). fee-payer(≈최대 감소 주소)∈watch 일 때만 fee(§14).
+ * 금액: balance_changes 의 native(0x2::sui::SUI) delta — 최대 감소=from,
+ *   **양수 delta 각각을 수신자 행으로**(한 tx 다중 수신 대응 — SOL 과 동일 §20).
+ *   fee-payer(≈최대 감소 주소)∈watch 일 때만 fee(§14).
  */
 @Injectable()
 export class SuiService implements AssetService, OnModuleInit {
@@ -139,15 +140,19 @@ export class SuiService implements AssetService, OnModuleInit {
 
   /**
    * balance_changes 에서 native SUI 이동 파싱: 최대 감소=from(gas 포함이라 fee-payer 근사),
-   * 최대 증가=to/amount. (SOL pre/postBalances delta 와 동일 휴리스틱)
+   * **양수 delta 전부=수신자 목록**(한 tx 다중 수신 대응 §20 — '최대 증가 1명=to' 는
+   * 배치 전송에서 누락 유발). 수신자는 주소 정렬 — txIndex 가 응답 순서·watch 구성과
+   * 무관하게 결정적이도록.
    */
   private parseNativeBalanceChanges(
     balanceChanges: { address?: string; coinType?: string; amount?: string }[],
-  ): { fromAddress?: string; toAddress?: string; amount: bigint } {
+  ): {
+    fromAddress?: string;
+    recipients: { address: string; amount: bigint }[];
+  } {
     let fromAddress: string | undefined;
-    let toAddress: string | undefined;
-    let amount = 0n;
     let minDelta = 0n;
+    const recipients: { address: string; amount: bigint }[] = [];
     for (const change of balanceChanges) {
       if (!isNativeSui(change.coinType) || !change.address) continue;
       const delta = BigInt(change.amount ?? 0);
@@ -155,12 +160,12 @@ export class SuiService implements AssetService, OnModuleInit {
         minDelta = delta;
         fromAddress = change.address;
       }
-      if (delta > amount) {
-        amount = delta;
-        toAddress = change.address;
+      if (delta > 0n) {
+        recipients.push({ address: change.address, amount: delta });
       }
     }
-    return { fromAddress, toAddress, amount };
+    recipients.sort((a, b) => (a.address < b.address ? -1 : 1));
+    return { fromAddress, recipients };
   }
 
   async scanTransactions(
@@ -237,28 +242,48 @@ export class SuiService implements AssetService, OnModuleInit {
       const n = seqs[i];
       for (const tx of r!.response.checkpoint?.transactions ?? []) {
         const status = tx.effects?.status?.success === false ? 0 : 1;
-        const parsed = this.parseNativeBalanceChanges(tx.balanceChanges ?? []);
+        const { fromAddress, recipients } = this.parseNativeBalanceChanges(
+          tx.balanceChanges ?? [],
+        );
         // 실패 tx 는 gas 차감만 남아 최대 감소 주소=fee-payer → §14 from∈watch 감지가 그대로 동작.
-        const isFrom = !!parsed.fromAddress && watch.has(parsed.fromAddress);
-        const isTo = !!parsed.toAddress && watch.has(parsed.toAddress);
-        if (!isFrom && !isTo) continue;
-        if (!isFrom && (status !== 1 || parsed.amount <= 0n)) continue; // 수신은 성공·양수만
+        const isFrom = !!fromAddress && watch.has(fromAddress);
+        if (!isFrom && status !== 1) continue; // 수신은 성공 tx 만
 
         const feeAmount =
           isFrom && tx.effects?.gasUsed
             ? calcGasFee(tx.effects.gasUsed).toString()
             : undefined;
-        txs.push({
-          txHash: tx.digest ?? '',
-          fromAddress: parsed.fromAddress,
-          toAddress: parsed.toAddress,
-          amount: (status === 1 ? parsed.amount : 0n).toString(),
-          feeAmount,
-          status,
-          blockNumber: n,
-          txIndex: 0, // balance delta = tx 단위 합산 → tx당 1행(SOL 과 동일)
-          raw: { digest: tx.digest },
+        // §20: 수신자별 행 분리. originate 면 전 수신자, 수신이면 watch 수신자만.
+        // txIndex=전체(정렬) 수신자 인덱스 — watch 구성과 무관해 재스캔에도 멱등 키 안정.
+        let emitted = 0;
+        recipients.forEach((rc, txIndex) => {
+          if (!isFrom && !watch.has(rc.address)) return;
+          txs.push({
+            txHash: tx.digest ?? '',
+            fromAddress,
+            toAddress: rc.address,
+            amount: (status === 1 ? rc.amount : 0n).toString(),
+            feeAmount: emitted === 0 ? feeAmount : undefined, // fee 중복 합산 방지
+            status,
+            blockNumber: n,
+            txIndex,
+            raw: { digest: tx.digest },
+          });
+          emitted++;
         });
+        // 우리가 originate 했는데 수신 행이 없으면(실패 tx=gas 만 소모) fee 기록용 단독 행.
+        if (isFrom && emitted === 0) {
+          txs.push({
+            txHash: tx.digest ?? '',
+            fromAddress,
+            amount: '0',
+            feeAmount,
+            status,
+            blockNumber: n,
+            txIndex: 0,
+            raw: { digest: tx.digest },
+          });
+        }
       }
     });
 

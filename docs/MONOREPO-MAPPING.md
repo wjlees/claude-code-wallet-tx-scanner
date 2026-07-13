@@ -89,7 +89,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
    - **EVM 주소 정규화**: contract 주소 비교는 lowercase 로(EVM 체크섬 대응). prototype=EVM `toDetected` 에서 `log.address` lowercase(SPL/TRC20 base58 은 case-sensitive라 건드리지 않음). monorepo=맵 키·tx.contractAddress lowercase + `saveDetectedTokens` lowercase fallback. ✅ 동등.
 
 7. **detected_transactions 멱등 (✅ 양쪽 완료)** — 유니크 키 **`(asset_id, tx_id, tx_index)`**. `tx_index` = tx 내 위치(한 tx 가 동일 transfer 를 여러 건 담을 수 있어 — EVM 배치, UTXO 다중 vout — from/to/amount 가 같아도 구분). ⚠️ tx_index 없이 걸면 정상 2건을 눌러 누락 → 반드시 포함.
-   - `tx_index` 출처: EVM=`log.logIndex`(⚠️ `transactionIndex` 아님; 블록 단위지만 tx 내 유일 → 충분), UTXO=vout `n`(fee 행=vout 개수), XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. **SOL/SPL=0 확정**(잔고 delta 는 tx 단위 합산이라 tx당 1행 — §16). XLM 은 op 파싱 전이라 0.
+   - `tx_index` 출처: EVM=`log.logIndex`(⚠️ `transactionIndex` 아님; 블록 단위지만 tx 내 유일 → 충분), UTXO=vout `n`(fee 행=vout 개수), XPLA=이벤트 순번, 그 외(코인·tx당 1건)=0. **SOL/SPL/SUI=전체 수신자(주소 정렬) 인덱스**(§20 — 다중 수신 행 분리; 과거 "tx당 1행·0 확정"은 폐기). XLM 은 op 파싱 전이라 0.
    - prototype: `DetectedTx.txIndex`/`InsertParams.txIndex` + 스캐너 채움 + stub repo `(assetId,txId,txIndex)` Set dedup.
    - monorepo: `tx_index` 컬럼 + UNIQUE `(asset_id, tx_id, tx_index)` migration + 스캐너 채움 + insert 중복 무시. **DB=MySQL 이라 PostgreSQL `ON CONFLICT DO NOTHING` 대신 TypeORM `.orIgnore()` 사용(동작 동일)**.
 
@@ -129,10 +129,9 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **prototype 완료**(2026-07-02): utxo-rpc.client 수신(vout)+출금/fee(vin) + verbosity 3/fallback 분기. rule 1 순수(노드 RPC 만).
     - **monorepo 완료**(2026-07-07): prevoutInline(btc=true, bch=false) + verbosity 3/fallback + 수신·출금/fee 행 + satoshi 정수화 동일 적용. (대규모(BTC) 캐치업은 §17 테이블 O(1) 탐지로 대체 가능 — 선택 최적화로 남김.)
     - **개선사항 — `wallet_scanner_unspents` 테이블**: vin (txid:n) 이 우리 것인지 DB O(1) 조회(네트워크 콜↓, 캐치업 폭발 방지) + vin 값도 보관해 fee 계산. **유지**: 입금 감지 시 unspent 추가, 출금 감지 시 spent 표시(스캐너가 forward 유지). **백필**: 새로 생성한 주소는 잔고 0에서 시작이라 불필요하나, **이미 잔고 있는 주소를 추가하면 기존 UTXO 일회성 스캐닝/import 필요**(별도 프로비저닝 엔드포인트).
-16. **SOL/SPL from/to·amount 파싱 (✅ 양쪽 완료)**. SOL/SPL 은 tx 에 금액 필드가 없어 **getParsedTransaction 의 잔고 delta** 로 계산: SOL=`pre/postBalances` 계정별 lamports delta(fee-payer(accountKeys[0]) delta 는 fee 를 빼고 순수 이동분만), SPL=`pre/postTokenBalances`(해당 mint) **owner 별** delta. **최대 감소=from, 최대 증가=to/amount**(단순 전송 기준 휴리스틱). SPL 0금액(이 mint 이동 없음) skip.
-    - **tx_index=0 유지 확정**: delta 는 tx 단위 합산이라 tx당 1행 — 과거 "파싱 시 instruction 인덱스로 교체" 계획은 폐기(멱등 키 충돌 없음).
+16. **SOL/SPL from/to·amount 파싱 (✅ 양쪽 완료 — ⚠️ to 휴리스틱은 §20 으로 개정)**. SOL/SPL 은 tx 에 금액 필드가 없어 **getParsedTransaction 의 잔고 delta** 로 계산: SOL=`pre/postBalances` 계정별 lamports delta(fee-payer(accountKeys[0]) delta 는 fee 를 빼고 순수 이동분만), SPL=`pre/postTokenBalances`(해당 mint) **owner 별** delta. ~~최대 감소=from, 최대 증가=to/amount~~ → **from=최대 감소는 유지, to 는 §20 수신자별 행 분리로 개정**(최대 증가 1명 방식은 다중 수신 누락 — "tx_index=0 확정"도 함께 폐기).
     - 검증: 실 메인넷 3 tx 에서 from/to/amount(lamports)/fee 정확 파싱 확인.
-    - **monorepo 완료**(2026-07-07): SOL pre/postBalances delta+fee 분리, SPL mint 필터 owner delta, tx_index=0.
+    - **monorepo 완료**(2026-07-07): SOL pre/postBalances delta+fee 분리, SPL mint 필터 owner delta. → §20 개정 반영 필요.
 17. **UTXO 원장 테이블 `wallet_scanner_unspents`(wallet DB) (✅ 양쪽 완료 — 백필 엔드포인트만 잔여)**. 감시 주소들의 모든 UTXO 를 wallet DB 에 원장으로 유지. ⚠️ 테이블명 최종 **`wallet_scanner_unspents`** — main DB 의 `crypto_address_unspents`(출금 레거시, outputIndex 등)와 **별개 테이블로 분리 유지**(monorepo 의 기존 `CryptoAddressUnspents` 엔티티는 그대로 둠). 용도: (1) **UTXO 잔고** = `SUM(amount) WHERE usable=1`(노드 RPC 로는 불가 — 주소 인덱스 없음), (2) **vin O(1) 출금 탐지**(대규모 체인에서 prevout 해소 대체 최적화), (3) 출금 시스템 vin 조합 재료.
     - **DDL(MySQL)**:
       ```sql
@@ -162,7 +161,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 
 18. **SUI 추가 — gRPC 단독 (✅ 양쪽 완료 — prototype 라이브 검증, monorepo 반영 확인)**. JSON-RPC 는 2026-07-31 종료(공용 엔드포인트는 7월 중 셧다운). GraphQL 은 fullnode 가 서빙 안 함(인덱서+Postgres 스택) → **bare fullnode = gRPC 만**으로 충분.
     - **스캔 = forward checkpoint 스캔**: cursor=checkpoint seq. `LedgerService.GetCheckpoint(n)` 의 `transactions[].balanceChanges` 인라인(read mask `transactions.digest/effects/balance_changes`) → 주소별 GraphQL 질의·per-digest 조회 불필요. 범위 RPC(구 getCheckpoints)는 폐지 → **GetCheckpoint 병렬(Promise.all, HTTP/2)**. 구 multiGetTransactionBlocks 대응 = `BatchGetTransactions`(digest 알 때 — 출금 확인용).
-    - **금액/fee**: native delta(최대 감소=from≈fee-payer, 최대 증가=to/amount — SOL 휴리스틱). fee=gasUsed(computation+storage−rebate, **bigint 필드**). §14 방향별 필터 동일. 실패 tx 도 gas 차감이 balance_changes 에 남아 from∈watch 감지 동작.
+    - **금액/fee**: native delta(최대 감소=from≈fee-payer; to 는 **§20 수신자별 행 분리** — 과거 '최대 증가=to' 폐기). fee=gasUsed(computation+storage−rebate, **bigint 필드**). §14 방향별 필터 동일. 실패 tx 도 gas 차감이 balance_changes 에 남아 from∈watch 감지 동작.
     - **라이브 검증(mainnet fullnode.mainnet.sui.io:443)**: 수신 {amount 750000, fee null} / 출금 {amount 104062500, fee 1097880, sender delta=amount+fee 일치}.
     - **함정(라이브 발견)**: (1) ⚠️ **coinType 은 풀 주소형** `0x000…002::sui::SUI` — `'0x2::sui::SUI'` 비교는 절대 매치 안 됨 → BigInt(주소부)===2n 정규화(`isNativeSui`). (2) ⚠️ getServiceInfo `checkpointHeight` 가 서빙보다 앞설 수 있음(NOT_FOUND) → 실패 checkpoint null 처리 후 **연속 성공 구간까지만** nextCursor 전진. (3) gasUsed 필드는 bigint(문자열 아님). (4) CJS 빌드는 `import()`→require 변환 → Function dynamic import 트릭.
     - **monorepo 반영 완료**(2026-07-10): GraphQL 전부 제거, isNativeSui, checkpoint 스캔+서빙랙 처리, calcGasFee(bigint|string), getTransaction=`batchGetTransactions`(read mask `checkpoint`/`effects.gas_used`)·blockNumber=checkpoint. 발산 1건: getTransaction 의 oneof narrowing 이 `!== 'transaction'` 으론 안 좁혀져 **`'transaction' in txResult` 가드** 사용(동작 동일).
@@ -173,6 +172,13 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 19. **confirmationThreshold 소스: ParamStore → `main.asset.confirm_threshold` (✅ 양쪽 완료)**. 전 자산 적용 — blockchain 서비스가 init 시 **`AssetRepository.getConfirmThresholdById(assetId)`** 로 1회 로드. 코인=자기 assetId(SUI/TRX/XPLA/BTC/BCH/EVM), **토큰=기반 체인 assetId 공유**(TRC20→TRX, EVM 토큰→baseAssetId). ParamStore 의 confirmationThreshold 키는 스캐너/deposit 경로에서 **미사용**(prototype 은 헬퍼·parameter.json 필드 제거).
     - prototype: `blockchain/asset.repository.ts`(port `ASSET_REPOSITORY`+`StubAssetRepository`) + `asset-repository.module.ts`(8개 체인 모듈이 import, EVM 은 factory inject). **rule 1 예외 명시**: 자산 메타 read 는 blockchain 이 port 로 조회 가능(영속화는 여전히 tx-scanner).
     - monorepo: `AssetRepository.getConfirmThresholdById` + 각 모듈 `TypeOrmModule.forFeature([Asset])`. deposit 은 `getByIds` 응답의 confirmThreshold 사용(`CryptoParams.confirmationThreshold` 제거).
+
+20. **잔고 delta 체인(SOL/SPL/SUI) 다중 수신자 행 분리 (✅ prototype 완료 2026-07-13 / monorepo 반영 필요)**. §16·§18 의 "최대 증가 1명=to, tx당 1행" 휴리스틱은 **한 tx 다중 수신**(배치 출금 — 거래소 핫월렛이 SUI PTB `splitCoins`+`transferObjects`×N / SOL 다중 instruction 으로 여러 명에게 동시 송금)에서 누락을 만든다: (a) 감시 주소 2개가 같은 tx 에서 수신하면 큰 쪽만 기록(작은 쪽은 유니크 키 (asset_id,tx_id,0) 에 눌림), (b) **감시 주소가 최대 수신자가 아니면**(남이 더 크게 받으면) SUI 는 `isTo=false` 로 tx 통째 skip, SOL/SPL 은 toAddress 가 남의 주소로 오귀속 → 위층 지갑 대조에서 미매칭=미크레딧. 레거시 입금 코드(주소별 자기 delta — `getSolDeposits(tx, address)`)는 안전했던 부분으로, tx 중심(from/to 1쌍) 일반화에서 온 회귀. EVM(로그당 행)·UTXO(vout당 행)·XRP/XLM/XPLA(tx당 1건)는 구조상 비해당.
+    - **공통 알고리즘(3개 서비스 동일)**: delta 를 주소별로 계산 → `fromAddress`=최대 감소(유지) → **양수 delta 전부를 `recipients[]` 로 수집 후 주소 오름차순 정렬** → 행 분리: `isFrom`(originate)이면 **전 수신자** 행, 아니면(수신) **watch 수신자만** 행. **`txIndex` = 전체(정렬) 수신자 목록에서의 인덱스** — watch 구성과 무관해 재스캔·감시 주소 추가 후에도 같은 값(멱등 키 안정; 레거시 sui_util 의 "address 정렬 index=txIndex" 와 같은 발상). **fee(feeAmount)는 첫 emit 행에만**(행 복수화로 fee 중복 합산 방지). `isFrom` 인데 emit 0건(실패 tx=gas 만 소모)이면 기존처럼 amount='0' 단독 행(txIndex=0).
+    - **SOL(sol.service.ts)**: delta 루프에서 `d > 0n` 을 recipients 로 수집(최대 증가 추적 제거), `isFrom = isFeePayer || fromAddress∈watch`. 부수 효과: 과거엔 sig 에 걸리면 from/to 가 전부 남의 주소여도 1행 기록(오귀속) → 이제 watch 무관 행 없음.
+    - **SPL(spl.service.ts)**: `deltaByOwner` 에서 동일 수집→정렬→행 분리(`watch = new Set(addresses)` 추가, `isFrom = fromAddress∈watch`). fee 없음(SOL native 행 담당 §14). **부수 수정**: postTokenBalances 를 owner 키로 `set()`(덮어쓰기)하던 것을 **합산(+=)** 으로 — 같은 owner 가 같은 mint 토큰계정 2개를 가지면 delta 가 유실되던 잠재 버그.
+    - **SUI(sui.service.ts)**: `parseNativeBalanceChanges` 반환을 `{fromAddress, recipients: {address, amount:bigint}[]}` 로 변경(최대 증가 제거, 정렬 포함), 스캔 루프의 `if (!isFrom && (status!==1 || amount<=0n)) continue` 를 `if (!isFrom && status!==1) continue` + 수신자별 watch 필터로 대체. 실패 tx fee 단독 행 로직 유지.
+    - **tx_index semantic 변경**: SOL/SPL/SUI = 전체 수신자(주소 정렬) 인덱스(§7 갱신 — 과거 "0 확정" 폐기). 유니크 키 `(asset_id, tx_id, tx_index)` 는 그대로.
 
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.

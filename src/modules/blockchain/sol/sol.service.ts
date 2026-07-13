@@ -29,7 +29,8 @@ interface SolState {
  * 스캔: 블록 순회가 아니라 **주소별 getSignaturesForAddress 페이징**.
  *   cursor=마지막으로 처리한 signature. {until: cursor} 로 그 이후 신규만 가져온다.
  *   signature 마다 getParsedTransaction 으로 fee/status + **pre/postBalances delta** 를 파싱해
- *   from(최대 감소)/to(최대 증가)/amount 를 계산한다(SOL 은 tx 에 금액 필드가 없음).
+ *   from(최대 감소)과 **수신자별(양수 delta) 행**을 만든다(SOL 은 tx 에 금액 필드가 없음;
+ *   한 tx 다중 수신 대응 §20).
  */
 @Injectable()
 export class SolService implements AssetService, OnModuleInit {
@@ -107,11 +108,11 @@ export class SolService implements AssetService, OnModuleInit {
         if (!isFeePayer && status !== 1) continue; // 실패 & 우리가 낸 fee 아님 → skip
 
         // native 이동은 pre/postBalances 의 계정별 lamports delta 로 계산(SOL 은 금액 필드가 없음).
-        // fee-payer 의 delta 에는 fee 가 섞여 있어 분리. 최대 감소=from, 최대 증가=to/amount.
+        // fee-payer 의 delta 에는 fee 가 섞여 있어 분리. 최대 감소=from,
+        // **양수 delta 전부=수신자**(§20 — '최대 증가 1명=to' 는 배치 전송에서 누락 유발).
         const fee = parsed?.meta?.fee != null ? BigInt(parsed.meta.fee) : 0n;
         let fromAddress: string | undefined;
-        let toAddress: string | undefined;
-        let amount = 0n;
+        const recipients: { address: string; amount: bigint }[] = [];
         const pre = parsed?.meta?.preBalances;
         const post = parsed?.meta?.postBalances;
         if (status === 1 && pre && post) {
@@ -124,27 +125,46 @@ export class SolService implements AssetService, OnModuleInit {
               minDelta = d;
               fromAddress = k;
             }
-            if (d > amount) {
-              amount = d;
-              toAddress = k;
-            }
+            if (d > 0n) recipients.push({ address: k, amount: d });
+          });
+          // txIndex 안정화: 수신자 순서를 주소 정렬로 고정(watch 구성과 무관)
+          recipients.sort((a, b) => (a.address < b.address ? -1 : 1));
+        }
+        // §14/§20: originate(fee-payer 또는 from∈watch)면 전 수신자 행, 수신이면 watch 수신자만.
+        const isFrom = isFeePayer || (!!fromAddress && watch.has(fromAddress));
+        const feeAmount =
+          isFeePayer && parsed?.meta?.fee != null
+            ? String(parsed.meta.fee)
+            : undefined;
+        let emitted = 0;
+        recipients.forEach((rc, txIndex) => {
+          if (!isFrom && !watch.has(rc.address)) return;
+          txs.push({
+            txHash: sig.signature,
+            fromAddress,
+            toAddress: rc.address,
+            amount: rc.amount.toString(),
+            feeAmount: emitted === 0 ? feeAmount : undefined, // fee 중복 합산 방지
+            status,
+            blockNumber: sig.slot,
+            txIndex,
+            raw: sig,
+          });
+          emitted++;
+        });
+        // 우리가 originate 했는데 수신 행이 없으면(실패 tx 등) fee 기록용 단독 행(amount=0).
+        if (isFrom && emitted === 0) {
+          txs.push({
+            txHash: sig.signature,
+            fromAddress: fromAddress ?? keys[0],
+            amount: '0',
+            feeAmount,
+            status,
+            blockNumber: sig.slot,
+            txIndex: 0,
+            raw: sig,
           });
         }
-        // §14: fee-payer∈watch 가 아니면(수신) 성공 & 금액>0 만.
-        if (!isFeePayer && amount <= 0n) continue;
-        txs.push({
-          txHash: sig.signature,
-          fromAddress,
-          toAddress,
-          amount: amount.toString(), // 실패면 0(위에서 미계산)
-          feeAmount:
-            isFeePayer && parsed?.meta?.fee != null
-              ? String(parsed.meta.fee)
-              : undefined,
-          status,
-          blockNumber: sig.slot,
-          raw: sig,
-        });
       }
     }
 

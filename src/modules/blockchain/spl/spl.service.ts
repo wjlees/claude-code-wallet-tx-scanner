@@ -24,7 +24,8 @@ interface SplState {
  *   getParsedTokenAccountsByOwner 로 소유자의 토큰계정을 찾고,
  *   각 토큰계정에 getSignaturesForAddress 페이징. cursor=마지막 signature.
  *   signature 마다 getParsedTransaction 의 **pre/postTokenBalances(해당 mint) owner 별 delta** 로
- *   from(감소)/to(증가)/amount 를 계산한다. fee 는 SOL native 행 담당(§14 — 토큰 행엔 없음).
+ *   from(최대 감소)과 **수신자별(양수 delta) 행**을 만든다(한 tx 다중 수신 대응 §20).
+ *   fee 는 SOL native 행 담당(§14 — 토큰 행엔 없음).
  */
 @Injectable()
 export class SplService implements TokenService, OnModuleInit {
@@ -72,6 +73,7 @@ export class SplService implements TokenService, OnModuleInit {
     }
 
     const limit = this.state.maxDepositScanRange!;
+    const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
     let newest: string | null = cursor;
 
@@ -105,7 +107,12 @@ export class SplService implements TokenService, OnModuleInit {
             const deltaByOwner = new Map<string, bigint>();
             for (const tb of parsed?.meta?.postTokenBalances ?? []) {
               if (tb.mint !== contractAddress || !tb.owner) continue;
-              deltaByOwner.set(tb.owner, BigInt(tb.uiTokenAmount.amount));
+              // 같은 owner 의 토큰계정이 여럿일 수 있어 덮어쓰지 않고 합산
+              deltaByOwner.set(
+                tb.owner,
+                (deltaByOwner.get(tb.owner) ?? 0n) +
+                  BigInt(tb.uiTokenAmount.amount),
+              );
             }
             for (const tb of parsed?.meta?.preTokenBalances ?? []) {
               if (tb.mint !== contractAddress || !tb.owner) continue;
@@ -115,29 +122,34 @@ export class SplService implements TokenService, OnModuleInit {
                   BigInt(tb.uiTokenAmount.amount),
               );
             }
+            // 최대 감소=from, 양수 delta 전부=수신자(§20 — 한 tx 다중 수신 대응).
             let fromAddress: string | undefined;
-            let toAddress: string | undefined;
-            let amount = 0n;
             let minDelta = 0n;
+            const recipients: { address: string; amount: bigint }[] = [];
             for (const [ownerAddr, d] of deltaByOwner) {
               if (d < minDelta) {
                 minDelta = d;
                 fromAddress = ownerAddr;
               }
-              if (d > amount) {
-                amount = d;
-                toAddress = ownerAddr;
-              }
+              if (d > 0n) recipients.push({ address: ownerAddr, amount: d });
             }
-            if (amount <= 0n) continue; // 이 mint 의 이동 없음(0금액) → skip
-            txs.push({
-              txHash: sig.signature,
-              fromAddress,
-              toAddress,
-              contractAddress,
-              amount: amount.toString(),
-              blockNumber: sig.slot,
-              raw: sig,
+            if (recipients.length === 0) continue; // 이 mint 의 이동 없음(0금액) → skip
+            // txIndex 안정화: 수신자 순서를 주소 정렬로 고정(watch 구성과 무관)
+            recipients.sort((a, b) => (a.address < b.address ? -1 : 1));
+            // §14/§20: originate(from∈watch)면 전 수신자 행, 수신이면 watch 수신자만.
+            const isFrom = !!fromAddress && watch.has(fromAddress);
+            recipients.forEach((rc, txIndex) => {
+              if (!isFrom && !watch.has(rc.address)) return;
+              txs.push({
+                txHash: sig.signature,
+                fromAddress,
+                toAddress: rc.address,
+                contractAddress,
+                amount: rc.amount.toString(),
+                blockNumber: sig.slot,
+                txIndex,
+                raw: sig,
+              });
             });
           }
         }
