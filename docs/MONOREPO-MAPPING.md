@@ -215,6 +215,26 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **롤아웃 순서 주의**: ① 유저 입금주소를 watch 에 포함시키는 배포 → ② `backfillUnspents(BTC)`/`(BCH)` 1회 실행(기존 잔고 적재) → ③ 이후는 forward 스캔이 유지. 순서가 바뀌면(백필 없이 운영) 기존 UTXO 의 vin 소비가 markSpent 에서 "미존재 outpoint 무시"로 흘러 출금 탐지 누락처럼 보일 수 있음(§17 semantics 상 안전하지만 원장이 불완전).
     - 스케일 기록: watch 확대는 UTXO 에만 적용(다른 체인 영향 없음). EVM 등에 유저 주소를 넣게 되면 토큰 스캔 topic 배열 크기 문제 검토 필요(§22 비고).
 
+24. **테이블 정비 — detected_transactions / wallet_scanner_asset (제안 확정 2026-07-16 / monorepo DDL 반영 필요)**. monorepo DDL 리뷰(2026-07-16) 결과:
+    - **detected_transactions**:
+      - 🔴 `tx_id` **NOT NULL 로**: 현재 NULL 허용인데 유니크 키 `(asset_id, tx_id, tx_index)` 구성원 — MySQL 은 유니크 키에 NULL 중복을 허용하므로 tx_id=NULL 행은 멱등이 깨짐. 스캐너는 txHash 를 항상 채우므로 조여도 무해.
+      - 🟠 `raw_amount`/`raw_fee_amount` **VARCHAR(78) 로**(§13 원래 합의): DECIMAL(65,0)은 uint256 최대(78자리)를 못 담음 — 초과 값이 오면 insert 에러로 그 사이클이 반복 실패(루프 고착). amount/fee_amount 의 DECIMAL(65,0)은 사토시 스케일이라 유지.
+      - 🟡 `status` DEFAULT 0→1 권장(0=실패 semantics 인데 기본값이 실패 — 코드가 항상 명시 세팅이라 동작 문제는 없음), `updated_at` 에 ON UPDATE CURRENT_TIMESTAMP(unspents 와 통일), `signed_tx_hex` 는 스캐너 미사용 — 다른 파이프라인 용도 없으면 제거, 후속 조회 필요 시 `(asset_id, to_address, block_number)` 인덱스(지금은 불요).
+    - **wallet_scanner_asset — 최소화**: 존재 이유는 "스캔 진행지점" 하나. main.asset 중복 컬럼(iso_alpha3/full_name/scale/confirm_threshold/is_deposit_address_with_memo_id/memo_id_type/exchange_address) 전부 제거 — 특히 confirm_threshold 는 §19 에서 **main.asset 이 진실 소스**로 확정됐으므로 남기면 이중 진실. rawDecimal 류 컬럼도 불요(ParamStore §13).
+      ```sql
+      CREATE TABLE wallet_scanner_asset (
+        id INT NOT NULL PRIMARY KEY,              -- main.asset.id / 토큰 자체 asset_id (한 id 공간)
+        start_block_number BIGINT NULL DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+      ```
+      - 🔴 `start_block_number` 는 **NULL DEFAULT NULL**(기존 NOT NULL DEFAULT 0 위험 — 코드는 null="head 부터"인데 0이면 from=1, 제네시스부터 캐치업 시도). repository 는 NULL→null 반환.
+      - BIGINT 타입은 §22 전환으로 전 자산 커서가 정수(블록/슬롯/ledger/checkpoint)가 되어 가능해짐(과거 signature/paging_token 시절엔 VARCHAR 필요했음). 미래 문자열 커서 자산 등장 시 재검토.
+      - `updated_at` = 사이클마다 갱신 → **루프 생존 모니터링 지표** 공짜 획득.
+      - 운영: 행 미존재 시 UPDATE 가 조용히 no-op — repository 를 upsert(INSERT … ON DUPLICATE KEY UPDATE)로 하거나 스캔 대상 id 전부(코인+토큰) 시드 필수.
+    - **wallet_scanner_unspents**: 현행 유지(§17 설계 그대로 — tx_id 64/amount BIGINT UNSIGNED/인덱스 적정). charset 만 utf8mb4 로 통일 권장(wallet_scanner_asset 이 utf8 이던 것).
+
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.
