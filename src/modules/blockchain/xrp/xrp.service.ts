@@ -26,8 +26,14 @@ interface XrpState {
  * XRP Ledger (XRP). 네이티브 코인.
  *
  * 노드: rippled JSON-RPC (XRP_RPC_URL). 핸들은 onModuleInit 에서 초기화.
- * 스캔: cursor=마지막 처리 ledger index. 주소별 account_tx 를 ledger 범위로 조회.
- *   Payment tx 의 Account/Destination 으로 in/out, DestinationTag 를 memoId(입금 식별)로.
+ * 스캔: **ledger 범위 스캔(§22)** — cursor=마지막 처리 ledger index(validated 기준).
+ *   `ledger`(transactions+expand)로 그 ledger 의 전체 tx+meta 를 1콜에 받아 필터.
+ *   ledger 주기 ~4s(사이클당 2~3개)라 부하 미미하고, 주소별 account_tx 방식의
+ *   공유 커서 유실·limit 중간 잘림 문제가 구조적으로 없다.
+ *   Payment 의 Account/Destination 으로 in/out, DestinationTag 를 memoId(입금 식별)로.
+ * ⚠️ **amount 는 meta.delivered_amount** 가 정답 — partial payment(tfPartialPayment) tx 는
+ *   tx.Amount(요청액)와 실제 전달액이 다르다(tx.Amount 로 크레딧하면 과다 지급 — 거래소
+ *   고전 공격 벡터). delivered_amount 없고 partial 플래그도 없을 때만 tx.Amount 사용.
  */
 @Injectable()
 export class XrpService implements AssetService, OnModuleInit {
@@ -79,55 +85,95 @@ export class XrpService implements AssetService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
-    const head = await client.getCurrentLedgerIndex();
-    // cursor 없으면 현재 ledger 부터 추적 시작.
+    const head = await client.getValidatedLedgerIndex();
     const from = cursor === null ? head : Number(cursor) + 1;
-    let maxLedger = cursor === null ? head : Number(cursor);
+    if (from > head) {
+      return { txs: [], nextCursor: String(head) };
+    }
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
 
-    const limit = this.state.maxDepositScanRange!;
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
-    for (const address of addresses) {
-      const entries = await client.accountTx(address, from, limit);
+    for (let ledgerIndex = from; ledgerIndex <= to; ledgerIndex++) {
+      const entries = await client.getLedgerTxs(ledgerIndex);
       for (const entry of entries) {
-        const tx = entry.tx ?? entry.tx_json ?? {};
-        const ledgerIndex: number =
-          entry.tx?.ledger_index ?? entry.ledger_index ?? tx.ledger_index ?? 0;
-        if (ledgerIndex > maxLedger) maxLedger = ledgerIndex;
-        if (tx.TransactionType && tx.TransactionType !== 'Payment') continue;
-        // status: 성공(tesSUCCESS) tx 만. (validated ledger 라 reorg 없음 → confirmationThreshold 불필요)
-        const meta = entry.meta ?? entry.metaData ?? {};
-        if (meta.TransactionResult && meta.TransactionResult !== 'tesSUCCESS') {
+        // rippled api v1: tx 필드 톱레벨 + metaData / v2: tx_json + meta — 둘 다 지원.
+        const tx = entry.tx_json ?? entry;
+        const meta = entry.metaData ?? entry.meta ?? {};
+        const txHash = entry.hash ?? tx.hash;
+        if (!txHash) continue;
+        // 실패 tx(tec 계열)도 validated ledger 에 실리고 fee 를 태운다.
+        const status = meta.TransactionResult === 'tesSUCCESS' ? 1 : 0;
+        const isFrom = !!tx.Account && watch.has(tx.Account);
+        const amount = this.deliveredAmount(tx, meta);
+        // txIndex = ledger 내 tx 위치(meta 제공) — 결정적 멱등 키.
+        const txIndex = Number(meta.TransactionIndex ?? 0);
+
+        if (isFrom) {
+          // §14: 우리가 originate(모든 타입) — 실패/0금액도 fee 소모 기록(status·amount 반영).
+          txs.push({
+            txHash,
+            fromAddress: tx.Account,
+            toAddress: tx.Destination,
+            amount: status === 1 && amount ? amount : '0',
+            feeAmount: typeof tx.Fee === 'string' ? tx.Fee : undefined,
+            status,
+            memoId:
+              tx.DestinationTag !== undefined
+                ? String(tx.DestinationTag)
+                : undefined,
+            blockNumber: ledgerIndex,
+            txIndex,
+            raw: { hash: txHash },
+          });
           continue;
         }
-        // 네이티브 XRP(string drops)만 + 0금액 제외. (issued currency=object 는 대상 아님)
-        const amount = typeof tx.Amount === 'string' ? tx.Amount : undefined;
+        // 수신: 성공한 Payment + 실제 전달액(delivered) 있는 것만.
+        if (tx.TransactionType !== 'Payment' || status !== 1) continue;
         if (!amount || Number(amount) <= 0) continue;
-
+        if (!tx.Destination || !watch.has(tx.Destination)) continue;
         txs.push({
-          txHash: entry.hash ?? tx.hash,
+          txHash,
           fromAddress: tx.Account,
           toAddress: tx.Destination,
           amount,
-          // 수수료: tx.Fee(drops). fee-payer=tx.Account 가 우리(watch)일 때만(우리가 낸 fee, §14).
-          feeAmount:
-            watch.has(tx.Account) && typeof tx.Fee === 'string'
-              ? tx.Fee
-              : undefined,
           memoId:
             tx.DestinationTag !== undefined
               ? String(tx.DestinationTag)
               : undefined,
-          blockNumber: ledgerIndex || undefined,
-          raw: entry,
+          status,
+          blockNumber: ledgerIndex,
+          txIndex,
+          raw: { hash: txHash },
         });
       }
     }
 
     this.logger.log(
-      `scanned account_tx → ${txs.length} tx (ledger ≤ ${maxLedger})`,
+      `scanned ledgers ${from}~${to} (XRP, validated) → ${txs.length} tx`,
     );
-    return { txs, nextCursor: String(maxLedger) };
+    return { txs, nextCursor: String(to) };
+  }
+
+  /**
+   * 실제 전달된 native XRP(drops). **partial payment 방어** —
+   * meta.delivered_amount(구버전 DeliveredAmount)가 있으면 그것만 신뢰(string=native).
+   * object(IOU)면 대상 아님. delivered 정보가 아예 없으면 partial 플래그가 없는
+   * 경우에 한해 tx.Amount 사용.
+   */
+  private deliveredAmount(tx: any, meta: any): string | undefined {
+    const delivered = meta.delivered_amount ?? meta.DeliveredAmount;
+    if (delivered !== undefined) {
+      return typeof delivered === 'string' ? delivered : undefined;
+    }
+    const TF_PARTIAL_PAYMENT = 0x00020000;
+    if (
+      typeof tx.Amount === 'string' &&
+      ((tx.Flags ?? 0) & TF_PARTIAL_PAYMENT) === 0
+    ) {
+      return tx.Amount;
+    }
+    return undefined;
   }
 
   async getBalance(address: string): Promise<string> {
@@ -145,6 +191,6 @@ export class XrpService implements AssetService, OnModuleInit {
       warnMissingNode(this.logger, XRP_PATH);
       return 0;
     }
-    return client.getCurrentLedgerIndex();
+    return client.getValidatedLedgerIndex();
   }
 }

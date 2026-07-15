@@ -14,7 +14,7 @@
 | blockchain 모듈 | ✅ 완료 | AssetService / TokenService 인터페이스 + 체인별 구현. 자산 12 + 토큰 5 |
 | wallet 모듈 (DB 껍데기) | ✅ 완료 | 고정 stub 주소 반환. DB 미연동 |
 | tx-scanner 모듈 | ✅ 완료 | **자산별 독립 무한 루프 + cron 워치독**. scanTransactions 호출 → 저장(껍데기) |
-| 자산별 scanTransactions | ✅ 완료 | EVM/BTC/TRX/TRC20/XPLA=블록범위, SOL/SPL=signature, XLM=Horizon, XRP=account_tx. cursor 기반 |
+| 자산별 scanTransactions | ✅ 완료 | **전 자산 범위 스캔**: EVM/BTC/TRX/TRC20/XPLA=블록, SOL+SPL=슬롯(통합 러너 §22), XLM=ledger payments, XRP=validated ledger, SUI=checkpoint. cursor 기반 |
 | 실제 노드 SDK 연동 | ✅ 완료 | EVM=web3, SOL/SPL=@solana/web3.js, XLM=@stellar/stellar-sdk, BTC/BCH·XRP·XPLA=JSON-RPC/REST(fetch), TRX/TRC20=tronweb. 노드 URL·scan range는 `parameter.json`(→env)에서 **async** 조회. 노드 URL 없으면 skip, scan range 는 필수(없으면 throw) |
 | 스캔 진행 지점 영속화 | ✅ 완료(stub) | `WalletScannerAssetRepository` → `wallet_scanner_asset.start_block_number`(=과거 cursor). 현재 in-memory stub — **DB 로 교체 예정** |
 | DB 연동 | ⬜ 미착수(의도) | wallet / tx(`detected_transactions`) / 진행지점(`asset`) 모두 stub, parameter 는 JSON — **회사 DB/ParamStore 로 교체 예정** |
@@ -46,8 +46,8 @@ src/
     │   │   ├── ethereum-common.module.ts # 옵션4: 개별 provider + 배열 aggregate(ETHEREUM_COMMON_SERVICES)
     │   │   ├── ethereum-common.service.ts # assetId당 1인스턴스. scanTransactions=블록범위 2-phase(getBlock hydrated+매칭건 receipt status===1, value>0), confirmations cap, usingBatchRequest 로 batch/promise 선택
     │   │   └── ethereum-based-assets.ts  # EthereumBasedAssetType(+usingBatchRequest) + ethereumBasedAssets/Ids(konet/klay/cross/base) + path
-    │   ├── sol/                      # AssetService. signature 페이징 스캔, 빠른 cadence(500ms)
-    │   ├── xlm/                      # AssetService. Horizon /accounts + memoId, cursor=paging_token
+    │   ├── sol/                      # AssetService. 슬롯(블록) 범위 스캔 — SPL 까지 한 파싱(통합 러너 §22)
+    │   ├── xlm/                      # AssetService. Horizon ledger payments 스캔(op 레벨 금액) + memoId, cursor=ledger seq
     │   ├── utxo-common/              # BTC/BCH 공용 UTXO 엔진 (btc/bch가 import+주입)
     │   │   ├── utxo-common.module.ts # UtxoCommonService provider/export
     │   │   ├── utxo-common.service.ts # 무상태 엔진. UtxoAssetConfig(rpcEnvKey/batchSize) 받아 동작, 클라 lazy 캐싱
@@ -55,7 +55,7 @@ src/
     │   ├── btc/                      # AssetService(얇음). UtxoCommonService 주입, BITCOIN_RPC_URL 위임
     │   ├── bch/                      # AssetService(얇음). UtxoCommonService 주입, BCH_RPC_URL 위임
     │   ├── trx/                      # AssetService. Tron(tronweb). 블록범위 TransferContract 매칭
-    │   ├── xrp/                      # AssetService. rippled JSON-RPC(fetch). account_tx, cursor=ledger index
+    │   ├── xrp/                      # AssetService. rippled JSON-RPC(fetch). validated ledger 스캔, delivered_amount
     │   │   ├── xrp.service.ts
     │   │   └── xrp-rpc.client.ts      # rippled JSON-RPC 클라이언트(fetch, xrpl SDK는 ESM 충돌로 미사용)
     │   ├── xpla/                     # AssetService. XPLA Cosmos LCD REST(fetch). 블록범위 transfer 이벤트
@@ -66,7 +66,7 @@ src/
     │   │   ├── ethereum-token-common.module.ts # 옵션4 + EthereumCommonModule import + ETHEREUM_TOKEN_COMMON_SERVICES
     │   │   ├── ethereum-token-common.service.ts # tokenTypeId당 1인스턴스. scanTransactions(Transfer 로그). baseAssetId 매칭
     │   │   └── ethereum-based-tokens.ts  # TokenTypeId(ERC20/KIP7) + baseAssetId + tokenName, 기반 자산 설정 스프레드
-    │   ├── spl/                      # TokenService. 토큰계정 signature 스캔(mintAddress), 빠른 cadence
+    │   ├── spl/                      # TokenService. 통합 러너(§22)가 기본 — ATA signature 스캔은 fallback
     │   └── trc20/                    # TokenService. TrxModule import → TrxService(tronweb) 재사용. transfer 디코드
     ├── wallet/                      # 스캔 대상 지갑 제공 (DB 껍데기)
     │   ├── wallet.module.ts
@@ -124,12 +124,12 @@ TxScannerService.onModuleInit()
 | konet/klay/cross/base (EVM) | 블록 범위 순회, tx.from/to 매칭 | 블록번호 |
 | kip7/konetToken/baseToken (EVM 토큰) | `eth_getLogs` Transfer 필터, 기반 자산 노드 재사용 | 블록번호 |
 | BTC/BCH (UTXO) | 블록 범위 vout 수신 매칭(공용 UtxoCommonService) | 블록번호 |
-| SOL | 주소별 `getSignaturesForAddress` 페이징(signature-only, from/to 미파싱) | signature |
-| SPL | 토큰계정 signature 페이징(signature-only) | signature |
-| XLM | Horizon `/accounts/{addr}/transactions` + memoId | paging_token |
+| SOL | **슬롯 범위 스캔**(`getBlocks`+`getParsedBlock` 청크 병렬) — 잔고 delta 파싱, SPL 동시 수집 | slot |
+| SPL | SOL 통합 러너에서 블록의 pre/postTokenBalances 로 수집(§22) | slot(SOL 과 공유) |
+| XLM | Horizon `/ledgers/{seq}/payments`+`transactions`(op 레벨 금액, stroops 변환) + memoId | ledger seq |
 | TRX | 블록 범위 TransferContract from/to 매칭(tronweb) | 블록번호 |
 | TRC20 | 블록 범위 TriggerSmartContract transfer 디코드(trx 노드 재사용) | 블록번호 |
-| XRP | 주소별 `account_tx` ledger 범위(rippled JSON-RPC) | ledger index |
+| XRP | **validated ledger 전체 tx 스캔**(`ledger` expand) — amount=`delivered_amount` | ledger index |
 | XPLA | 블록 범위 Cosmos `transfer` 이벤트 매칭(LCD REST) | 블록높이 |
 
 > 노드 RPC 메서드 상세 근거는 [`docs/fetching-transactions-by-node.md`](./docs/fetching-transactions-by-node.md).
@@ -243,11 +243,11 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 |------|------|------|------|
 | eth / polygon (EVM) | Erigon Otterscan `ots_searchTransactions*` 또는 `trace_filter` | blockNumber | 표준 RPC엔 주소 검색 없음. archive 권장 |
 | eth-token (ERC20) | `eth_getLogs` Transfer 필터 | blockNumber | 네이티브 전송은 안 잡힘 |
-| sol / spl | `getSignaturesForAddress` → `getTransaction` | signature | full 이력은 archive 노드 |
-| xlm | Horizon `GET /accounts/{id}/transactions` | paging_token | core + 자체 Horizon 운영 |
+| sol / spl | `getBlocks` → `getParsedBlock`(청크 병렬) — native+SPL delta 동시 | slot | legacy 입금로직이 블록 스캔 실증 |
+| xlm | Horizon `GET /ledgers/{seq}/payments` + `/transactions` | ledger seq | core + 자체 Horizon 운영 |
 | btc / bch | 블록 verbose(2) vout 수신 매칭(현재), 또는 watch-only `listsinceblock`/ElectrumX | blockNumber | 'out' 은 prevout 추적/ watch-only 필요(TODO) |
 | trx / trc20 | 블록(`getBlock`) TransferContract / TriggerSmartContract 디코드 | blockNumber | TRC20 은 transfer(a9059cbb) 셀렉터 디코드 |
-| xrp | `account_tx` (ledger 범위, forward) | ledger index | DestinationTag=memoId. s1.ripple.com 안정 |
+| xrp | `ledger` (transactions+expand, validated) | ledger index | DestinationTag=memoId, amount=delivered_amount |
 | xpla | LCD `txInfosByHeight` + Cosmos `transfer` 이벤트 | blockHeight | tx.body.memo=memoId |
 
 **설계 시사점**: ① 전부 커서 기반이므로 "전부 가져오기"가 아닌 **증분 스캔 + 커서 영속화**로 가야 함. ② 커서 타입이 체인마다 달라 opaque 문자열 커서 추상화 권장. ③ BTC/BCH는 주소 사전 등록(watch) 단계가 필요. ④ 인터페이스를 `getTransactions(address, { cursor, limit }) → { txs, nextCursor }` 형태로 확장 검토.
@@ -257,7 +257,6 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 - [ ] **DB 연동**: `WalletService.getScanAddresses` 가 실제 DB에서 주소를 조회. `DetectedTransactionsRepository`/`WalletScannerAssetRepository` stub 을 실제 DB 로 교체.
 - [ ] **토큰 assetId / 멱등** (§5-6·§5-7): 토큰 detected.assetId 를 contractAddress→assetId 로, detected_transactions 멱등 unique index.
 - [ ] **스캔 취소 가능화**: `scanTransactions` 에 AbortController/timeout 도입 → 워치독이 hung RPC 를 끊고 재시작 가능하게.
-- [ ] **from/to 파싱 보강**: SOL/SPL signature-only → getParsedTransaction 으로 fromAddress/toAddress 채우기.
 - [ ] **API/트리거**: 외부에서 스캔 상태 조회/수동 트리거할 컨트롤러.
 
 ---
@@ -281,6 +280,8 @@ NestFactory.createApplicationContext(AppModule).then(async (app) => {
 - **2026-07-10**: **confirmationThreshold 소스: ParamStore → main.asset.confirm_threshold** (§5-19, monorepo 정렬). 전 자산이 init 시 `AssetRepository.getConfirmThresholdById(assetId)` 로 로드 — 코인=자기 assetId, 토큰(TRC20→TRX, EVM 토큰→baseAssetId)=기반 체인 공유. `asset.repository.ts`(port+stub)+`asset-repository.module.ts` 신설, 8개 체인 모듈 배선(EVM 은 factory inject). ParamStore 헬퍼·parameter.json 의 confirmationThreshold 제거. rule 1 예외 명시(자산 메타 read 는 port 허용). +SUI 타입 발산 기록: monorepo 는 resolution-mode 도 TS1479 → 타입 참조 제거+dynamic import 추론(`Awaited<ReturnType>`), prototype 은 resolution-mode 유지. 검증: build/lint/부팅(konet=12·trx=20·xpla=1·sui=0 stub 로드).
 - **2026-07-10**: **BTC UTXO 스캔 테스트 유틸** `scripts/btc-utxo-scan-test.mjs` — 실노드에 붙여 스캐너(§15 vin/vout·fee, §17 unspents) 로직 그대로 실행(의존성 0, Node 18+). verbosity 3 자동 감지→미지원 시 2+getrawtransaction fallback, 감시주소 미지정 시 첫 블록에서 자동 표본(수신자+보낸이). BTC/BCH 노드 확보 시 런타임 검증용.
 - **2026-07-13**: **잔고 delta 체인(SOL/SPL/SUI) 다중 수신자 행 분리** (§5-20). '최대 증가 1명=to, tx당 1행' 휴리스틱이 배치 전송(한 tx 다중 수신)에서 누락 유발 — 감시 주소 2개 수신 시 큰 쪽만 기록, 감시 주소가 최대 수신자가 아니면 SUI 는 tx skip·SOL/SPL 은 toAddress 오귀속. 수정: **양수 delta 각각을 행으로**(originate 면 전 수신자, 수신이면 watch 수신자만), `tx_index=전체 수신자(주소 정렬) 인덱스`(재스캔 멱등), fee 는 첫 행에만, 실패 tx 는 amount=0 단독 행 유지. SPL 부수 수정: 같은 owner 다중 토큰계정 delta 덮어쓰기→합산. EVM/UTXO/XRP/XLM/XPLA 는 구조상 비해당.
+- **2026-07-15**: **필수 수정 묶음(§5-21)** — monorepo 코드 전수 리뷰 발견분. (1) XPLA transfer 이벤트 amount 가 "1234axpla"(denom 붙음) → `nativeAmountOf` 로 axpla 수량만 추출(타 denom 오인 차단). 라이브: dimension 블록 20419704 파싱 확인. (2) parameter.json xpla `rawDecimal` 6→**18**(atto). (3) EVM batch 응답의 null block/receipt 를 skip→**throw**(조용한 유실 방지, 러너 재시도). (4) sol `maxDepositScanRange` 1000→100(슬롯 semantics).
+- **2026-07-15**: **스캔 방식 전환 — 전 자산 "범위 스캔 + 자산당 커서 1개" 통일(§5-22)**. 주소별 스트림 방식(공유 커서 유실·재파싱 부하) 폐기, 주소별 커서 테이블 불채택(불필요해짐). (1) **SOL+SPL 통합 러너**: `UNIFIED_SCAN_PAIRS` both-set 러너 1개 — SolService 가 슬롯 범위(`getParsedBlock` 청크 25 병렬)에서 native §20 행 + SPL(mint) 행을 한 파싱에 생성, 저장은 contractAddress 유무로 분리, 진행지점 SOL+SPL 행 동시 갱신. 러너 17→16개. (2) **XRP validated ledger 스캔**: `ledger`(expand) 1콜/ledger, amount=**`meta.delivered_amount`**(partial payment 방어), tec 실패 originate 도 fee 행, txIndex=TransactionIndex. (3) **XLM ledger payments 스캔**: `/ledgers/{seq}/payments`+`transactions` — **amount 미기록 문제 해소**(op 레벨 금액, stroops 변환), fee 는 tx 당 첫 op 행. 라이브 검증: SOL(432999490~494 native+USDC 동시), XRP(105608342 delivered 일치), XLM(63483298 1-stroop 변환), 부팅 16루프.
 - **2026-07-09**: **SUI 추가 — gRPC 단독** (§5-18). JSON-RPC 2026-07-31 종료·GraphQL 은 인덱서 스택이라 **bare fullnode=gRPC 만**. `SuiService`: cursor=checkpoint seq, `GetCheckpoint` **병렬**(범위 RPC 폐지; 구 multiGet 대응=`BatchGetTransactions`) + `balanceChanges` 인라인 → native delta(최대감소=from/최대증가=to·amount), fee=gasUsed(bigint) 합산, §14 방향별. **라이브 검증**: mainnet 수신/출금 감지(출금 fee 1097880 = sender delta−amount 일치). 함정: coinType 풀 주소형(`isNativeSui` 정규화), checkpointHeight 서빙랙(연속 성공 구간만 전진), ESM 전용 SDK(CJS 는 Function dynamic import + 로컬 구조 타입). `@mysten/sui`+`@protobuf-ts/grpc-transport`+`@grpc/grpc-js` 의존성.
 - **2026-07-07**: **§13~17 monorepo 적용 완료 확인 + unspents 테이블명 `wallet_scanner_unspents` 확정**. monorepo 가 §13(사토시+raw 컬럼: raw_*=VARCHAR(78), amount/fee_amount=기존 DECIMAL(65,0) 유지)·§14(fee native 행)·§15(UTXO vin)·§16(SOL/SPL delta)·§17(unspents) 적용 회신 → 매핑 §5 전부 ✅ 양쪽 완료. **테이블명 `crypto_address_unspents`(wallet)→`wallet_scanner_unspents` rename**(main DB 출금 레거시 `crypto_address_unspents` 와 분리) — prototype 코드/문서 동일 정합. usable 의미=스캐너 확정 소비만(출금 예약 필요 시 status enum 분리, 출금 모듈 연동 시 결정). monorepo 잔여: scantxoutset 백필 HTTP 엔드포인트, XRP 로스터 미등록(기존).
 - **2026-07-02**: **UTXO 원장 `wallet_scanner_unspents`(wallet DB) + 백필** (§5-17). UTXO 는 노드 RPC 로 주소 잔고 조회가 안 되므로 감시 주소의 UTXO 를 wallet DB 원장으로 유지 — 잔고=`SUM(usable=1)`, vin O(1) 출금탐지, 출금 vin 조합 재료. 스캐너가 forward 유지: 수신(vout∈watch)→INSERT(usable=1, 유니크 멱등), 소비(vin=우리 outpoint)→usable=0+spent_tx_id. `DetectedTx.utxo{created, spentOutpoints}` 추가(UTXO 스캐너가 채움), tx-scanner `maintainUnspents`, `UnspentsRepository`(stub: insert/markSpent/sumUsable). **백필**(잔고 있는 주소 추가 시): `scantxoutset`(Core 0.17+, UTXO set 스캔·수십초~수분) → `UtxoRpcClient.scanTxOutset`/`UtxoCommonService.listLiveUtxos`. 블록 1~latest 재스캔은 비현실적(안 만듦). DDL(MySQL)은 매핑 §17 — monorepo 가 테이블 생성. 검증: stub 흐름(INSERT 2건→중복 흡수→markSpent→잔고 8000만→3000만) 정확, build/lint/부팅.

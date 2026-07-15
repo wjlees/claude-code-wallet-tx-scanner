@@ -19,6 +19,10 @@ interface SplState {
 /**
  * Solana SPL 토큰.
  *
+ * ⚠️ **기본 스캔 경로 아님(§22)**: SOL+SPL 은 `UNIFIED_SCAN_PAIRS` 통합 러너가
+ *   SolService 의 블록 스캔에서 SPL delta 까지 함께 수집한다(tx-scanner 가 이 서비스의
+ *   개별 러너를 만들지 않음). 아래 scanTransactions 는 단독 운용 fallback 용으로만 유지.
+ *
  * 노드: @solana/web3.js Connection (SOLANA_RPC_URL). 핸들은 onModuleInit 에서 초기화.
  * 스캔: 소유자 주소가 아니라 **토큰계정(ATA)** 단위로 일어난다.
  *   getParsedTokenAccountsByOwner 로 소유자의 토큰계정을 찾고,

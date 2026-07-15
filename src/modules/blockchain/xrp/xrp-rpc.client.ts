@@ -29,29 +29,29 @@ export class XrpRpcClient {
     return json.result;
   }
 
-  /** 현재 검증 진행 중인 ledger index */
-  async getCurrentLedgerIndex(): Promise<number> {
-    const r = await this.rpc<{ ledger_current_index: number }>(
-      'ledger_current',
-      {},
-    );
-    return r.ledger_current_index;
+  /**
+   * 마지막 **validated** ledger index. (`ledger_current` 는 미검증 진행분이라 스캔 기준으로
+   * 쓰면 안 됨 — validated 만 최종.)
+   */
+  async getValidatedLedgerIndex(): Promise<number> {
+    const r = await this.rpc<{
+      ledger_index?: number;
+      ledger?: { ledger_index?: string | number };
+    }>('ledger', { ledger_index: 'validated' });
+    return Number(r.ledger_index ?? r.ledger?.ledger_index ?? 0);
   }
 
-  /** 주소의 계정 tx 를 ledger 범위로 조회 (forward) */
-  async accountTx(
-    account: string,
-    ledgerIndexMin: number,
-    limit = 200,
-  ): Promise<any[]> {
-    const r = await this.rpc<{ transactions: any[] }>('account_tx', {
-      account,
-      ledger_index_min: ledgerIndexMin,
-      ledger_index_max: -1,
-      forward: true,
-      limit,
+  /**
+   * 특정 ledger 의 **전체 tx + metadata** (`transactions: true, expand: true` — 1콜).
+   * 반환 엔트리: rippled api v1 은 tx 필드 톱레벨 + `metaData`, v2 는 `tx_json` + `meta`.
+   */
+  async getLedgerTxs(ledgerIndex: number): Promise<any[]> {
+    const r = await this.rpc<{ ledger?: { transactions?: any[] } }>('ledger', {
+      ledger_index: ledgerIndex,
+      transactions: true,
+      expand: true,
     });
-    return r.transactions ?? [];
+    return r.ledger?.transactions ?? [];
   }
 
   async getBalance(account: string): Promise<string> {

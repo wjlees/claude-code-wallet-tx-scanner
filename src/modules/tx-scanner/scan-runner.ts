@@ -50,6 +50,13 @@ export class ScanRunner {
   }
 
   get label(): string {
+    if (
+      this.target.assetId !== undefined &&
+      this.target.tokenTypeId !== undefined
+    ) {
+      // 통합 러너(§22): 코인+토큰 한 루프 (예: SOL+SPL 블록 스캔)
+      return `unified#${this.target.assetId}+token#${this.target.tokenTypeId}(${this.contractAddresses.length}):${this.service.symbol}`;
+    }
     if (this.target.tokenTypeId !== undefined) {
       return `token#${this.target.tokenTypeId}(${this.contractAddresses.length}):${this.service.symbol}`;
     }
@@ -108,6 +115,8 @@ export class ScanRunner {
         // 체인 경계는 불투명 cursor (=startBlockNumber 값을 그대로 전달/회신).
         // 토큰은 이 token_type 의 컨트랙트 목록을 넘겨 그 토큰들의 transfer 만 수집한다
         // (각 tx 의 contractAddress 로 저장 단계에서 asset_id 분류).
+        // 통합 러너(both-set, §22)도 이 분기를 탄다 — 코인 서비스가 contractAddresses 를
+        // 옵션으로 받아 native+token 행을 함께 반환한다(SolService).
         const { txs, nextCursor } =
           this.target.tokenTypeId !== undefined
             ? await (this.service as TokenService).scanTransactions(

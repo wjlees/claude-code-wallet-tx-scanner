@@ -6,6 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { BlockchainService } from '../blockchain/blockchain.service';
+import { UNIFIED_SCAN_PAIRS } from '../blockchain/constants';
 import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
@@ -66,8 +67,15 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     const assetServices = this.blockchain.getAllAssetServices();
     const tokenServices = this.blockchain.getAllTokenServices();
 
+    // 통합 러너 쌍(§22 — SOL+SPL 등): 코인/토큰 개별 러너 대신 both-set 러너 1개.
+    const unifiedAssetIds = new Set(UNIFIED_SCAN_PAIRS.map((p) => p.assetId));
+    const unifiedTokenTypeIds = new Set(
+      UNIFIED_SCAN_PAIRS.map((p) => p.tokenTypeId),
+    );
+
     // 코인(네이티브 자산): 자산당 러너 1개.
     for (const service of assetServices) {
+      if (unifiedAssetIds.has(service.getAssetId())) continue; // 통합 러너가 담당
       this.runners.push(this.createAssetRunner(service));
     }
 
@@ -75,6 +83,7 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
     // [(assetId, contractAddress)] 을 받아 **한 루프**로 스캔하고, 결과 tx 를 contractAddress
     // 로 분류해 각 토큰의 asset_id 로 저장한다. 진행지점은 그 토큰 행들이 함께 갱신된다.
     for (const service of tokenServices) {
+      if (unifiedTokenTypeIds.has(service.getTokenTypeId())) continue; // 통합 러너가 담당
       const tokens = await this.tokenRepository.getTokensByType(
         service.getTokenTypeId(),
       );
@@ -82,6 +91,20 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
         continue; // 추적할 토큰이 없으면 러너를 만들지 않는다.
       }
       this.runners.push(this.createTokenRunner(service, tokens));
+    }
+
+    // 통합 러너: 코인 서비스가 contractAddresses 를 받아 native+token 행을 한 파싱에 생성.
+    for (const pair of UNIFIED_SCAN_PAIRS) {
+      const service = assetServices.find(
+        (s) => s.getAssetId() === pair.assetId,
+      );
+      if (!service) continue;
+      const tokens = await this.tokenRepository.getTokensByType(
+        pair.tokenTypeId,
+      );
+      this.runners.push(
+        this.createUnifiedRunner(service, pair.tokenTypeId, tokens),
+      );
     }
 
     this.runners.forEach((r) => r.start());
@@ -147,6 +170,54 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
       // 이 타입의 모든 토큰 행을 같은 값으로 갱신.
       async (sbn) => {
         for (const id of assetIds) {
+          await this.scannerAssetRepository.updateStartBlockNumber(id, sbn);
+        }
+      },
+      this.logger,
+    );
+  }
+
+  /**
+   * 통합 러너(§22): 코인+토큰을 한 루프로. 저장은 행의 `contractAddress` 유무로 분리 —
+   * 없으면 코인(assetId), 있으면 토큰(contractAddress→asset_id 분류). 진행지점은
+   * 코인 행 + 이 token_type 의 토큰 행들을 **모두 같은 값으로** 갱신(같이 도므로 §10).
+   */
+  private createUnifiedRunner(
+    service: AssetService,
+    tokenTypeId: number,
+    tokens: TokenRow[],
+  ): ScanRunner {
+    const assetId = service.getAssetId();
+    const rawDecimal = service.getRawDecimal();
+    const target: ScanTarget = { assetId, tokenTypeId };
+    const contractAddresses = tokens.map((t) => t.contractAddress);
+    const infoByContract = new Map(
+      tokens.map((t) => [
+        t.contractAddress,
+        { assetId: t.assetId, rawDecimal: t.rawDecimal },
+      ]),
+    );
+    const tokenAssetIds = tokens.map((t) => t.assetId);
+    return new ScanRunner(
+      target,
+      service,
+      contractAddresses,
+      () => this.wallets.getScanAddresses(target),
+      async (txs) => {
+        const coinTxs = txs.filter((t) => !t.contractAddress);
+        const tokenTxs = txs.filter((t) => t.contractAddress);
+        if (coinTxs.length > 0) {
+          await this.saveDetected(assetId, rawDecimal, coinTxs);
+        }
+        if (tokenTxs.length > 0) {
+          await this.saveDetectedTokens(infoByContract, tokenTxs);
+        }
+      },
+      // 코인 행을 대표로 로드(토큰 행들도 같은 값으로 유지되므로 동일).
+      () => this.scannerAssetRepository.getStartBlockNumber(assetId),
+      async (sbn) => {
+        await this.scannerAssetRepository.updateStartBlockNumber(assetId, sbn);
+        for (const id of tokenAssetIds) {
           await this.scannerAssetRepository.updateStartBlockNumber(id, sbn);
         }
       },

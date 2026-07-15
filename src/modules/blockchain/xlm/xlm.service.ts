@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Horizon } from '@stellar/stellar-sdk';
+import { BigNumber } from 'bignumber.js';
 import { AssetId } from '../constants';
 import { AssetService } from '../interfaces/asset.interface';
 import { DetectedTx, ScanResult } from '../interfaces/scan.types';
@@ -27,8 +28,15 @@ interface XlmState {
  *
  * 노드: Horizon (STELLAR_HORIZON_URL). 핸들은 onModuleInit 에서 초기화.
  *   단일 입금 주소 + **memoId** 로 입금 주체 식별.
- * 스캔: Horizon `/accounts/{addr}/transactions` 를 paging_token(cursor) 기준으로 페이징.
- *   tx.memo 를 memoId 로, source_account 로 in/out 판별.
+ * 스캔: **ledger 범위 스캔(§22)** — cursor=마지막 처리 ledger sequence.
+ *   ledger 마다 `/ledgers/{seq}/payments`(operation 레벨 — **금액·from·to 포함**)와
+ *   `/ledgers/{seq}/transactions`(fee_charged·memo)를 조회해 병합한다.
+ *   과거 주소별 paging_token 방식의 공유 커서 유실·계정 히스토리 처음부터 스캔 문제가
+ *   구조적으로 없고, tx 레벨엔 없던 **amount 가 payment op 에서 나온다**.
+ *   ledger 주기 ~5-6s(사이클당 ~2개)라 부하 미미. Horizon 은 기본으로 성공 tx 의
+ *   op 만 반환(include_failed=false) → 수신 status 필터 내장.
+ * 금액 단위: Horizon 은 XLM 소수 문자열("12.5000000") — **stroops(×10^7) 정수로 변환**해
+ *   raw 로 반환(rawDecimal=7 과 정합).
  */
 @Injectable()
 export class XlmService implements AssetService, OnModuleInit {
@@ -80,44 +88,102 @@ export class XlmService implements AssetService, OnModuleInit {
       return { txs: [], nextCursor: cursor };
     }
 
-    const limit = this.state.maxDepositScanRange!;
+    // head = 최신 ledger sequence. (ledger close=최종이라 confirmationThreshold 불필요)
+    const head = await this.getBlockHeight();
+    const from = cursor === null ? head : Number(cursor) + 1;
+    if (from > head) {
+      return { txs: [], nextCursor: String(head) };
+    }
+    const to = Math.min(from + this.state.maxDepositScanRange! - 1, head);
+
     const watch = new Set(addresses);
     const txs: DetectedTx[] = [];
-    let nextCursor: string | null = cursor;
 
-    for (const address of addresses) {
-      const page = await server
-        .transactions()
-        .forAccount(address)
-        .cursor(cursor ?? '')
-        .order('asc')
-        .limit(limit)
-        .call();
+    for (let seq = from; seq <= to; seq++) {
+      // 1) tx 레벨 정보(fee_charged/memo) — hash 로 매핑.
+      const txInfo = new Map<string, { fee?: string; memo?: string }>();
+      for await (const rec of this.pages(
+        server.transactions().forLedger(seq),
+      )) {
+        txInfo.set(rec.hash, {
+          fee: rec.fee_charged != null ? String(rec.fee_charged) : undefined,
+          memo: rec.memo,
+        });
+      }
+      // 2) payment operation 들 — 금액/from/to. tx 내 op 순번을 txIndex 로(결정적).
+      const opIndexByTx = new Map<string, number>();
+      const feeEmittedFor = new Set<string>();
+      for await (const rec of this.pages(server.payments().forLedger(seq))) {
+        const parsed = this.parsePaymentOp(rec);
+        if (!parsed) continue;
+        const txHash: string = rec.transaction_hash;
+        const txIndex = opIndexByTx.get(txHash) ?? 0;
+        opIndexByTx.set(txHash, txIndex + 1);
 
-      for (const record of page.records) {
-        nextCursor = record.paging_token;
-        // status: 성공 tx 만. (Stellar ledger close=최종이라 confirmationThreshold 불필요)
-        if ((record as any).successful === false) continue;
-        // tx 레벨엔 source_account(from)만 명확. destination 은 operation 파싱 필요(TODO).
-        // 스캔 대상 계정이 sender 가 아니면 수신자(to)로 본다(best-effort).
-        const fromAddress = record.source_account;
+        const isFrom = watch.has(parsed.from);
+        const isTo = watch.has(parsed.to);
+        if (!isFrom && !isTo) continue;
+        const info = txInfo.get(txHash);
+        // §14: fee 는 fee-payer(source)∈watch 일 때만 + 한 tx 다중 op 시 첫 행에만(중복 방지).
+        let feeAmount: string | undefined;
+        if (isFrom && !feeEmittedFor.has(txHash)) {
+          feeAmount = info?.fee;
+          feeEmittedFor.add(txHash);
+        }
         txs.push({
-          txHash: record.hash,
-          fromAddress,
-          toAddress: fromAddress === address ? undefined : address,
-          // 수수료: fee_charged(stroops). fee-payer=source_account 가 우리일 때만(§14).
-          feeAmount: watch.has(fromAddress)
-            ? (record as any).fee_charged
-            : undefined,
-          memoId: (record as any).memo,
-          blockNumber: (record as any).ledger,
-          raw: record,
+          txHash,
+          fromAddress: parsed.from,
+          toAddress: parsed.to,
+          // Horizon 금액은 XLM 소수 문자열 → stroops(raw, 10^7) 정수로.
+          amount: new BigNumber(parsed.amountXlm).shiftedBy(7).toFixed(0),
+          feeAmount,
+          memoId: info?.memo,
+          status: 1, // Horizon 기본: 성공 tx 의 op 만 반환
+          blockNumber: seq,
+          txIndex,
+          raw: { id: rec.id, type: rec.type },
         });
       }
     }
 
-    this.logger.log(`scanned Horizon tx → ${txs.length} tx`);
-    return { txs, nextCursor };
+    this.logger.log(
+      `scanned ledgers ${from}~${to} (XLM payments) → ${txs.length} tx`,
+    );
+    return { txs, nextCursor: String(to) };
+  }
+
+  /** Horizon CallBuilder 페이지 순회(한 ledger 에 op 가 page limit 를 넘을 때 대비). */
+  private async *pages(builder: {
+    limit: (n: number) => any;
+  }): AsyncGenerator<any> {
+    let page = await builder.limit(200).call();
+    while (true) {
+      for (const rec of page.records) yield rec;
+      if (page.records.length < 200) return;
+      page = await page.next();
+    }
+  }
+
+  /**
+   * payment 계열 op 에서 native XLM 이동(from/to/amount) 추출.
+   * - `payment`/`path_payment_*`: asset_type==='native' 만 (from/to/amount).
+   * - `create_account`: funder→account, starting_balance.
+   * - `account_merge` 는 op 에 금액이 없어(effects 필요) 미지원 — TODO(개선 후보).
+   */
+  private parsePaymentOp(
+    rec: any,
+  ): { from: string; to: string; amountXlm: string } | null {
+    if (rec.type === 'create_account' && rec.funder && rec.account) {
+      return {
+        from: rec.funder,
+        to: rec.account,
+        amountXlm: rec.starting_balance,
+      };
+    }
+    if (rec.asset_type === 'native' && rec.from && rec.to && rec.amount) {
+      return { from: rec.from, to: rec.to, amountXlm: rec.amount };
+    }
+    return null;
   }
 
   async getBalance(address: string): Promise<string> {
