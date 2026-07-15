@@ -89,6 +89,11 @@ export class BtcService implements AssetService, OnModuleInit {
     return this.utxo.getBalance(this.cfg, address);
   }
 
+  /** §17/§23 백필: 주소들의 현재 살아있는 UTXO 일회 조회(scantxoutset). */
+  listLiveUtxos(addresses: string[]) {
+    return this.utxo.listLiveUtxos(this.cfg, addresses);
+  }
+
   getBlockHeight(): Promise<number> {
     return this.utxo.getBlockHeight(this.cfg);
   }

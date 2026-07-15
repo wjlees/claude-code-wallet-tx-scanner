@@ -208,6 +208,13 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
       - 라이브 검증(horizon.stellar.org): ledger 63483298 payment 0.0000001 XLM → amount '1'(stroop) 정확 변환.
     - **비전환**: EVM/UTXO/TRX/TRC20/XPLA/SUI 는 원래 범위 스캔이라 변경 없음. XLM/XRP 의 "우리 originate 실패 tx fee 행"은 XRP 는 이번에 포함, XLM 은 Horizon 이 실패 tx op 를 안 줘 여전히 미기록(보류 기록).
 
+23. **UTXO watch 정책 + scantxoutset 백필 (✅ prototype 완료 2026-07-16 / monorepo 반영 필요)**. 운영 모델 확정: **비-UTXO 체인은 입금 즉시 핫월렛 포워딩**이라 watch=핫/콜드(+거래소 계정)로 충분. **UTXO(BTC/BCH)는 포워딩 없음** — 유저 입금주소에 UTXO 가 머물고, 출금도 그 UTXO 들을 vin 으로 직접 조합(핫월렛 경유 없음) → **유저 입금주소 전체를 watch 에 포함**해야 입금·출금 감지가 성립. 출금 관측은 wallet_scanner_unspents 의 UTXO 소비(vin 매칭→markSpent)로 충분(§17).
+    - **getScanAddresses 확장**: UTXO 자산(assetId∈{BTC,BCH})이면 기존 핫/콜드 주소에 **유저 입금주소 전체를 합쳐**(Set dedupe) 반환. prototype=`WalletService.getUserDepositAddresses(assetId)`(stub, TODO(DB)) / monorepo=`ScanTargetService.getScanAddresses` 에서 유저 입금주소 테이블(crypto_deposit_wallet 류) 조회 — **주소 수가 크므로 캐싱(예: 30s) 권장**(매 사이클 DB 전량 조회 방지).
+    - **scantxoutset 백필(§17 잔여 해소)**: `TxScannerService.backfillUnspents(assetId, addresses?)` — addresses 생략 시 getScanAddresses 로 해석 → 자산 서비스의 `listLiveUtxos(addresses)`(btc/bch 서비스가 UtxoCommonService.listLiveUtxos 위임 노출) → 결과를 `insertUnspent` 로 적재(유니크 키 멱등 — 재실행 안전). 스캔 루프와 분리된 수동 트리거, **monorepo 는 HTTP 프로비저닝 엔드포인트로 노출**(그쪽 잔여 항목이던 것).
+    - **scanTxOutset 청크**: bitcoind 는 scantxoutset 을 **동시에 1개만** 실행 가능 + 스캔당 수십초 소요 → 주소를 **1000개 청크로 순차** 실행(UtxoRpcClient.scanTxOutset 내장). 유저 주소 수만 개면 수십 분 걸릴 수 있음 — 일회성 프로비저닝이므로 허용, 진행 로그 확인.
+    - **롤아웃 순서 주의**: ① 유저 입금주소를 watch 에 포함시키는 배포 → ② `backfillUnspents(BTC)`/`(BCH)` 1회 실행(기존 잔고 적재) → ③ 이후는 forward 스캔이 유지. 순서가 바뀌면(백필 없이 운영) 기존 UTXO 의 vin 소비가 markSpent 에서 "미존재 outpoint 무시"로 흘러 출금 탐지 누락처럼 보일 수 있음(§17 semantics 상 안전하지만 원장이 불완전).
+    - 스케일 기록: watch 확대는 UTXO 에만 적용(다른 체인 영향 없음). EVM 등에 유저 주소를 넣게 되면 토큰 스캔 topic 배열 크기 문제 검토 필요(§22 비고).
+
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.

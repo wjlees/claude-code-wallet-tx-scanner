@@ -108,9 +108,10 @@ export class UtxoRpcClient {
 
   /**
    * 백필용: 주소들의 **현재 살아있는 UTXO 전부**를 UTXO set 스캔으로 조회
-   * (`scantxoutset`, Core 0.17+; txindex 불필요, 수십초~수분 소요 — 일회성 프로비저닝 용도).
-   * 이미 잔고 있는 주소를 감시 목록에 추가할 때 unspents 테이블 초기 적재(§17)에 쓴다.
-   * 노드 미지원 시 throw → 외부 인덱서(Electrum/Esplora) 등 대체 필요.
+   * (`scantxoutset`, Core 0.17+; txindex 불필요, 스캔당 수십초~수분 소요 — 일회성 프로비저닝 용도).
+   * 이미 잔고 있는 주소를 감시 목록에 추가할 때 unspents 테이블 초기 적재(§17/§23)에 쓴다.
+   * ⚠️ bitcoind 는 scantxoutset 을 **한 번에 하나만** 실행 가능 → 주소가 많으면(유저 입금주소
+   * 전체 등) 청크로 나눠 **순차** 실행한다. 노드 미지원 시 throw → 외부 인덱서 대체 필요.
    */
   async scanTxOutset(addresses: string[]): Promise<
     {
@@ -121,18 +122,32 @@ export class UtxoRpcClient {
       height: number;
     }[]
   > {
-    const result = await this.rpc<any>('scantxoutset', [
-      'start',
-      addresses.map((a) => `addr(${a})`),
-    ]);
-    return (result?.unspents ?? []).map((u: any) => ({
-      txId: u.txid,
-      txIndex: u.vout,
-      // desc 에서 주소 복원이 번거로우므로 단일 주소 스캔이 아니면 scriptPubKey 매칭 필요 — 여기선 desc 기반 best-effort.
-      address: String(u.desc ?? '').replace(/^addr\((.*)\)#.*$/, '$1'),
-      amountSat: this.toSat(u.amount),
-      height: Number(u.height ?? 0),
-    }));
+    const CHUNK = 1000; // 디스크립터 개수 상한(페이로드·스캔 시간 균형)
+    const out: {
+      txId: string;
+      txIndex: number;
+      address: string;
+      amountSat: string;
+      height: number;
+    }[] = [];
+    for (let i = 0; i < addresses.length; i += CHUNK) {
+      const group = addresses.slice(i, i + CHUNK);
+      const result = await this.rpc<any>('scantxoutset', [
+        'start',
+        group.map((a) => `addr(${a})`),
+      ]);
+      for (const u of result?.unspents ?? []) {
+        out.push({
+          txId: u.txid,
+          txIndex: u.vout,
+          // desc 에서 주소 복원(best-effort — addr() 디스크립터로 스캔하므로 복원 가능).
+          address: String(u.desc ?? '').replace(/^addr\((.*)\)#.*$/, '$1'),
+          amountSat: this.toSat(u.amount),
+          height: Number(u.height ?? 0),
+        });
+      }
+    }
+    return out;
   }
 
   /** from..to 블록을 스캔: 수신(vout∈watch) + 출금/fee(vin∈watch, §14) 를 반환. */

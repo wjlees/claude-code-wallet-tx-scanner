@@ -339,6 +339,54 @@ export class TxScannerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * §17/§23 UTXO 백필(일회성 프로비저닝): 감시 주소들의 **현재 살아있는 UTXO 전부**를
+   * scantxoutset 으로 조회해 `wallet_scanner_unspents` 에 적재한다.
+   * 용도: 이미 잔고가 있는 주소(기존 유저 입금주소 등)를 감시 목록에 추가할 때 —
+   * forward 스캔은 추가 시점 이후의 UTXO 만 잡으므로 과거분은 이걸로 채운다.
+   * 유니크 키 `(asset_id, tx_id, tx_index)` 로 멱등(재실행 안전). 스캔 루프와 분리된
+   * 수동 트리거 — monorepo 는 HTTP 프로비저닝 엔드포인트에서 호출.
+   */
+  async backfillUnspents(
+    assetId: number,
+    addresses?: string[],
+  ): Promise<{ scannedAddresses: number; utxos: number }> {
+    const service = this.blockchain.getAssetService(assetId) as {
+      listLiveUtxos?: (addrs: string[]) => Promise<
+        {
+          txId: string;
+          txIndex: number;
+          address: string;
+          amountSat: string;
+          height: number;
+        }[]
+      >;
+    };
+    if (typeof service.listLiveUtxos !== 'function') {
+      throw new Error(`asset#${assetId} does not support UTXO backfill`);
+    }
+    const targets =
+      addresses ?? (await this.wallets.getScanAddresses({ assetId }));
+    if (targets.length === 0) {
+      return { scannedAddresses: 0, utxos: 0 };
+    }
+    const utxos = await service.listLiveUtxos(targets);
+    for (const u of utxos) {
+      await this.unspentsRepository.insertUnspent({
+        assetId,
+        address: u.address,
+        txId: u.txId,
+        txIndex: u.txIndex,
+        amount: u.amountSat,
+        blockNumber: u.height,
+      });
+    }
+    this.logger.log(
+      `[backfill] asset#${assetId}: ${targets.length} addr → ${utxos.length} live UTXO(s) loaded`,
+    );
+    return { scannedAddresses: targets.length, utxos: utxos.length };
+  }
+
+  /**
    * 워치독: 죽었거나 오래 정체된 루프를 감지해 재시작한다. (스캔은 하지 않음)
    * `@Cron` 이 아니라 setInterval 로 주기 호출된다(monorepo 는 scheduler_manager).
    */

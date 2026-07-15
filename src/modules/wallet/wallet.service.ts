@@ -29,18 +29,48 @@ export class WalletService {
   }
 
   /**
+   * UTXO 계열 자산(§23): **유저 입금주소 전체**가 스캔 대상에 포함돼야 한다.
+   * 비-UTXO 체인은 입금이 즉시 핫월렛으로 포워딩되지만, UTXO 는 포워딩 없이
+   * 유저 입금주소에 UTXO 가 머물고 출금도 그 UTXO 들을 vin 으로 직접 조합한다
+   * (핫월렛 경유 없음) — 그래서 핫/콜드만 보면 입금·출금 모두 누락된다.
+   */
+  private readonly utxoAssetIds: number[] = [AssetId.BTC, AssetId.BCH];
+
+  /**
    * 스캔 대상(`ScanTarget`)의 감지 주소 목록.
-   * target → assetId 목록으로 해석한 뒤, 그 자산에 속한 지갑들의 주소를 모아 반환한다.
+   * target → assetId 목록으로 해석한 뒤, 그 자산에 속한 지갑들의 주소를 모으고,
+   * UTXO 자산이면 유저 입금주소 전체를 합친다(§23).
    */
   async getScanAddresses(target: ScanTarget): Promise<string[]> {
     const assetIds = await this.resolveAssetIds(target);
-    const addresses = this.stubWallets
-      .filter((w) => w.assetIds.some((id) => assetIds.includes(id)))
-      .flatMap((w) => w.addresses);
-    console.log(
-      `[WalletService] getScanAddresses(${JSON.stringify(target)}) → assetIds=[${assetIds}] → ${addresses.length} addr (stub)`,
+    const addresses = new Set(
+      this.stubWallets
+        .filter((w) => w.assetIds.some((id) => assetIds.includes(id)))
+        .flatMap((w) => w.addresses),
     );
-    return addresses;
+    for (const assetId of assetIds) {
+      if (!this.utxoAssetIds.includes(assetId)) continue;
+      for (const addr of await this.getUserDepositAddresses(assetId)) {
+        addresses.add(addr);
+      }
+    }
+    console.log(
+      `[WalletService] getScanAddresses(${JSON.stringify(target)}) → assetIds=[${assetIds}] → ${addresses.size} addr (stub)`,
+    );
+    return [...addresses];
+  }
+
+  /**
+   * 유저 입금주소 전체(UTXO 백필·스캔용).
+   * NOTE: 실제로는 유저 입금주소 테이블(crypto_deposit_wallet 류) 조회 —
+   *   주소 수가 크므로 monorepo 는 캐싱(예: 30s) 권장. 현재는 stub.
+   */
+  // TODO(DB): 유저 입금주소 테이블 조회로 교체.
+  private async getUserDepositAddresses(assetId: number): Promise<string[]> {
+    console.log(
+      `[WalletService] getUserDepositAddresses(${assetId}) - stub (DB not wired yet)`,
+    );
+    return [];
   }
 
   /**
