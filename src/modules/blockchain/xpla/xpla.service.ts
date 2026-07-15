@@ -24,7 +24,7 @@ interface XplaState {
   maxDepositScanRange?: number;
   /** reorg 안전 마진(스캔 끝 = head-confirmationThreshold). commit 최종이라 보통 0. */
   confirmationThreshold?: number;
-  /** 원본 최소단위 자릿수(axpla=6). 사토시 환산용. */
+  /** 원본 최소단위 자릿수(axpla=**18** — atto). 사토시 환산용. */
   rawDecimal?: number;
 }
 
@@ -115,7 +115,7 @@ export class XplaService implements AssetService, OnModuleInit {
         // status: 성공 tx 만(Cosmos tx_response.code===0).
         if (txr.code && Number(txr.code) !== 0) continue;
         const memo = txr.tx?.body?.memo || undefined;
-        // 수수료: auth_info.fee.amount 의 axpla(native). rawDecimal 은 XPLA(6) 로 tx-scanner 가 환산.
+        // 수수료: auth_info.fee.amount 의 axpla(native). rawDecimal 은 XPLA(18) 로 tx-scanner 가 환산.
         const feeAmount = this.feeOf(txr);
         const recipients = this.eventValues(txr, 'transfer', 'recipient');
         const senders = this.eventValues(txr, 'transfer', 'sender');
@@ -123,13 +123,16 @@ export class XplaService implements AssetService, OnModuleInit {
         for (let i = 0; i < recipients.length; i++) {
           const recipient = recipients[i];
           const sender = senders[i];
-          if (!amounts[i] || parseInt(amounts[i], 10) <= 0) continue; // 0금액 제외
+          // ⚠️ 이벤트 amount 는 "1234axpla"(수량+denom, 콤마로 다중 코인 가능) 형태.
+          // native(axpla) 수량만 추출 — 다른 denom(IBC/CW20 등)을 XPLA 입금으로 오인 금지.
+          const amount = this.nativeAmountOf(amounts[i]);
+          if (!amount || BigInt(amount) <= 0n) continue; // native 아님/0금액 제외
           if (watch.has(recipient) || (sender && watch.has(sender))) {
             txs.push({
               txHash: txr.txhash,
               fromAddress: sender,
               toAddress: recipient,
-              amount: amounts[i],
+              amount,
               // fee-payer=보낸쪽(sender)이 우리일 때만 기록(§14). (tx 단위 수수료, native axpla)
               feeAmount: sender && watch.has(sender) ? feeAmount : undefined,
               memoId: memo,
@@ -144,6 +147,19 @@ export class XplaService implements AssetService, OnModuleInit {
 
     this.logger.log(`scanned blocks ${from}~${to} (XPLA) → ${txs.length} tx`);
     return { txs, nextCursor: String(to) };
+  }
+
+  /**
+   * transfer 이벤트의 amount 문자열("1234axpla" 또는 "1uatom,2axpla")에서
+   * native(axpla) 수량만 추출한다. native 가 없으면 undefined.
+   */
+  private nativeAmountOf(coins?: string): string | undefined {
+    if (!coins) return undefined;
+    for (const part of coins.split(',')) {
+      const m = /^(\d+)axpla$/.exec(part.trim());
+      if (m) return m[1];
+    }
+    return undefined;
   }
 
   /** tx 의 수수료(native axpla, raw)를 auth_info.fee.amount 에서 뽑는다. 없으면 undefined. */

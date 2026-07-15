@@ -155,7 +155,9 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     const candidates: { tx: any; blockNumber: number; isFrom: boolean }[] = [];
     blockNumbers.forEach((bn, i) => {
       const block = blocks[i];
-      if (!block) return;
+      // batch 부분 실패(result 누락)를 조용히 건너뛰면 커서만 전진해 그 블록이 영구 유실된다
+      // → throw 로 사이클 전체 재시도(멱등 저장이라 안전).
+      if (!block) throw new Error(`missing block ${bn} in scan response`);
       for (const tx of block.transactions ?? []) {
         if (typeof tx === 'string') continue;
         const value = tx.value != null ? BigInt(tx.value) : 0n;
@@ -177,7 +179,8 @@ export class EthereumCommonService implements AssetService, OnModuleInit {
     const txs: DetectedTx[] = [];
     candidates.forEach((c, i) => {
       const receipt = receipts[i];
-      if (!receipt) return;
+      // receipt 누락도 동일 — skip 하면 그 tx 만 조용히 유실 → throw 로 재시도.
+      if (!receipt) throw new Error(`missing receipt ${c.tx.hash}`);
       const status = BigInt(receipt.status ?? 0) === 1n ? 1 : 0;
       if (!c.isFrom && status !== 1) return; // 실패한 수신은 무의미 → skip
       const value = c.tx.value != null ? BigInt(c.tx.value) : 0n;

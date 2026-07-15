@@ -22,7 +22,7 @@
   },
   "sol": {
     "nodeUrl": "",
-    "maxDepositScanRange": "1000",
+    "maxDepositScanRange": "100",
     "rawDecimal": "9"
   },
   "xlm": {
@@ -53,7 +53,7 @@
   "xpla": {
     "nodeUrl": "https://dimension-lcd.xpla.dev",
     "maxDepositScanRange": "10",
-    "rawDecimal": "6"
+    "rawDecimal": "18"
   },
   "kip7": {
     "maxDepositScanRange": "1000"
