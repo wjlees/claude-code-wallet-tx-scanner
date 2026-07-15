@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { BlockchainService } from '../blockchain/blockchain.service';
-import { UNIFIED_SCAN_PAIRS } from '../blockchain/constants';
+import { AssetId, TokenTypeId } from '../blockchain/constants';
 import { AssetService } from '../blockchain/interfaces/asset.interface';
 import { TokenService } from '../blockchain/interfaces/token.interface';
 import { DetectedTx, ScanTarget } from '../blockchain/interfaces/scan.types';
@@ -31,6 +31,18 @@ import { ScanRunner } from './scan-runner';
 
 /** 워치독 점검 주기(ms). */
 const WATCHDOG_INTERVAL_MS = 60_000;
+
+/**
+ * **통합 러너 쌍(§22)** — 감지 메커니즘이 같아 코인+토큰을 한 루프로 도는 조합.
+ * 러너를 어떻게 구성할지는 tx-scanner 의 책임이라 여기(내부 상수)에 둔다 —
+ * blockchain 층은 "코인 서비스가 contractAddresses 를 받을 수 있다"는 능력만 제공.
+ * SOL+SPL: 블록(getParsedBlock) 하나에 native delta(pre/postBalances)와 SPL delta
+ * (pre/postTokenBalances)가 함께 있어 한 번 파싱으로 둘 다 얻는다(블록 이중 다운로드 방지).
+ * (EVM 은 감지 RPC 가 달라 — native=블록/receipt, erc20=getLogs — 합칠 수 없음)
+ */
+const UNIFIED_SCAN_PAIRS: { assetId: number; tokenTypeId: number }[] = [
+  { assetId: AssetId.SOL, tokenTypeId: TokenTypeId.SPL },
+];
 
 /**
  * 대상 주소의 모든 in/out tx 를 감지하여 저장하는 스캐너.

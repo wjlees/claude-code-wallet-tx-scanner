@@ -34,7 +34,7 @@ interface SolState {
  *   commitment 'finalized' = reorg 안전(confirmationThreshold cap 대응).
  * 통합 러너: 블록의 각 tx 에 native(pre/postBalances)와 SPL(pre/postTokenBalances) delta 가
  *   함께 있어 **한 번 파싱으로 SOL 행 + SPL 토큰 행을 동시 생성**한다. tx-scanner 가
- *   `UNIFIED_SCAN_PAIRS`(SOL+SPL)로 러너 1개만 만들고 contractAddresses(mint 목록)를 넘긴다.
+ *   통합 러너(SOL+SPL — 구성은 tx-scanner 내부 상수) 1개만 만들고 contractAddresses(mint 목록)를 넘긴다.
  * 금액: 주소별 잔고 delta — 최대 감소=from, 양수 delta 각각=수신자 행(§20).
  */
 @Injectable()

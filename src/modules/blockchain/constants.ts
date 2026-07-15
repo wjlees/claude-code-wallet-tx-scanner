@@ -31,15 +31,3 @@ export enum TokenTypeId {
   SPL = 4,
   TRC20 = 5,
 }
-
-/**
- * **통합 러너 쌍(§22)** — 감지 메커니즘이 같아 코인+토큰을 한 루프로 도는 조합.
- * SOL+SPL: 블록(getParsedBlock) 하나에 native delta(pre/postBalances)와 SPL delta
- * (pre/postTokenBalances)가 함께 있어 한 번 파싱으로 둘 다 얻는다(블록 이중 다운로드 방지).
- * tx-scanner 는 이 쌍의 개별 러너를 만들지 않고 both-set `ScanTarget` 러너 1개를 만든다.
- * (EVM 은 감지 RPC 가 달라 — native=블록/receipt, erc20=getLogs — 합칠 수 없음)
- */
-export const UNIFIED_SCAN_PAIRS: {
-  assetId: AssetId;
-  tokenTypeId: TokenTypeId;
-}[] = [{ assetId: AssetId.SOL, tokenTypeId: TokenTypeId.SPL }];
