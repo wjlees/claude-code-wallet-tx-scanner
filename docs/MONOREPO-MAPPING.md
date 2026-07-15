@@ -44,7 +44,7 @@
 | btc | ISO_ALPHA3_BTC | `btc` |
 | bch | ISO_ALPHA3_BCH | `bch` |
 | trx | ISO_ALPHA3_TRX | `tron` (path≠symbol) |
-| xrp | ISO_ALPHA3_XRP | `xrp` — ⚠️ monorepo 스캐너 **미등록**(추후 추가), prototype 만 스캔 |
+| xrp | ISO_ALPHA3_XRP | `xrp` (✅ 2026-07-15 monorepo `BlockchainService` 등록 — §22 ledger 스캔 형태) |
 | xpla | ISO_ALPHA3_XPLA | `xpla` |
 | sui | ISO_ALPHA3_SUI | `sui` (rawDecimal=9 MIST; confirm_threshold=0(main.asset) — checkpoint 최종) |
 
@@ -59,7 +59,7 @@
 
 ## 3. 자산 로스터 ✅ (2026-06-29 일치)
 prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/klay/cross/base/sol/xlm/btc/bch/trx/xpla/sui` + token `kip7/konetToken/baseToken/spl/trc20`. (이전 `ETH/POL/erc20` 제거, `cross` 는 EVM 으로 ethereum-common 에 추가.)
-- ⚠️ **`xrp`: prototype 로스터엔 있으나 monorepo 스캐너/`BlockchainService` 미등록(추후 별도 추가 예정)** — 현재 유일한 로스터 차이.
+- `xrp`: ✅ monorepo `BlockchainService` 등록 완료(2026-07-15, §22 ledger 스캔 형태) — 로스터 차이 해소.
 - 참고: monorepo wallet fork 에는 ETH/MATIC/WEMIX/FLR/ARBITRUM 등이 더 있으나 tx-scanner 미등록 → 로스터 제외. legacy 출금 전용 모듈(eth/pol/wemix/...)은 ethereum-common/token-common 으로 정리됨.
 
 ## 4. 포팅 체크리스트 (커밋마다 — diff 대신 이걸 읽힘)
@@ -181,7 +181,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **tx_index semantic 변경**: SOL/SPL/SUI = 전체 수신자(주소 정렬) 인덱스(§7 갱신 — 과거 "0 확정" 폐기). 유니크 키 `(asset_id, tx_id, tx_index)` 는 그대로(DDL 변경 없음).
     - **monorepo 반영 완료**(2026-07-14): 3개 서비스 `scanTransactions` 만 수정(scanBlocks 미접촉), 공통 알고리즘·isFrom 판정·fee 첫 행·단독 fee 행·SPL owner 합산까지 §20 스펙 그대로 확인. prototype 검증: mainnet 라이브 3체인(SUI cp 298024544 / SOL slot 432608343 / SPL(USDC) slot 432608453) "작은 수신자만 watch" 케이스 정상 기록.
 
-21. **필수 수정 묶음 — 금액 오염/유실 방지 (✅ prototype 완료 2026-07-15 라이브 검증 / monorepo 반영 필요)**. monorepo 코드 전수 리뷰(스냅샷 2026-07-14)에서 발견:
+21. **필수 수정 묶음 — 금액 오염/유실 방지 (✅ 양쪽 완료 — prototype 2026-07-15 라이브 검증, monorepo 2026-07-15 반영·tsc 통과)**. monorepo 코드 전수 리뷰(스냅샷 2026-07-14)에서 발견. ⚠️ **배포 게이트 잔여**: monorepo 반영은 parameter.example/README 기준 — **실배포 ParamStore 의 rawDecimal 전 path(특히 xpla=18)·sol range=100·sui range≥45 는 배포 전 사람이 확인**해야 함(코드로 안 바뀜).
     - **XPLA amount denom 파싱**: Cosmos `transfer` 이벤트의 amount 값은 **"1234axpla"(수량+denom, 콤마로 다중 코인 가능)** 형태 — 그대로 저장하면 `toSatoshi(BigNumber('…axpla'))=NaN`, 그리고 denom 필터가 없으면 **IBC 등 타 denom 전송을 XPLA 입금으로 오인**. 수정: `nativeAmountOf(coins)` — 콤마 분리 후 `/^(\d+)axpla$/` 매치만 수량 추출, 아니면 skip. (xpla.service.ts scanTransactions. 라이브: dimension 블록 20419704 에서 "4154625306255111111axpla" → "4154625306255111111" 확인)
     - **XPLA rawDecimal = 18**: axpla 는 atto(10^-18) — ParamStore `xpla.rawDecimal` 을 **18** 로(6 아님. legacy `getSatoshiFromAtto` 의 8−18 shift 와 동일 근거). 6이면 사토시 환산이 10^12 배 오염.
     - **rawDecimal 전 path 전수 확인(배포 게이트)**: 미설정이면 각 서비스가 **조용히 default 8** 로 동작 → 금액 오염. 필수값: EVM 4개=18, sol/sui=9, xlm=7, tron=6, **xpla=18**, btc/bch=8.
@@ -189,7 +189,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
     - **SUI CHECKPOINT_CHUNK**: §18 처리량 후속 — GetCheckpoint 를 한 번에 Promise.all 하지 말고 **청크 25 병렬(청크 간 순차, 청크에 실패 있으면 이후 청크 요청 생략)**. 429 미발생 노드라도 캐치업 버스트 완화 + 서빙랙 시 헛요청 방지. sui `maxDepositScanRange` ≥45(권장 100) 확인.
     - (XRP delivered_amount / XLM amount 는 §22 스캔 전환에 포함)
 
-22. **스캔 방식 전환 — 전 자산 "범위 스캔 + 자산당 커서 1개"로 통일 (✅ prototype 완료 2026-07-15 라이브 검증 / monorepo 반영 필요)**. 배경: 주소별 스트림 조회(SOL getSignaturesForAddress / SPL ATA sigs / XLM forAccount / XRP account_tx)는 **커서가 자산당 1개인데 스트림은 주소당 1개**라 (a) 한 주소의 limit 초과 미처리분을 다른 주소가 찍은 커서가 지나침(유실), (b) XRP 는 limit 중간 잘림(marker 미사용)으로 같은 ledger 잔여 유실, (c) SOL 은 타 주소 sig 가 until 에 안 걸려 **매 사이클 히스토리 재파싱**(부하). 주소별 커서 테이블(`wallet_scanner_address`) 대안도 검토했으나 **블록/ledger 범위 스캔으로 전환하면 불필요**(스키마 변경 없음)로 결정 — XRP ~4s/XLM ~5-6s/SOL 0.4s 라 사이클당 2~25개로 여유(legacy 입금로직이 SOL 블록 스캔을 프로덕션에서 실증).
+22. **스캔 방식 전환 — 전 자산 "범위 스캔 + 자산당 커서 1개"로 통일 (✅ 양쪽 완료 — prototype 2026-07-15 라이브 검증, monorepo 2026-07-15 반영·tsc 통과)**. 배경: 주소별 스트림 조회(SOL getSignaturesForAddress / SPL ATA sigs / XLM forAccount / XRP account_tx)는 **커서가 자산당 1개인데 스트림은 주소당 1개**라 (a) 한 주소의 limit 초과 미처리분을 다른 주소가 찍은 커서가 지나침(유실), (b) XRP 는 limit 중간 잘림(marker 미사용)으로 같은 ledger 잔여 유실, (c) SOL 은 타 주소 sig 가 until 에 안 걸려 **매 사이클 히스토리 재파싱**(부하). 주소별 커서 테이블(`wallet_scanner_address`) 대안도 검토했으나 **블록/ledger 범위 스캔으로 전환하면 불필요**(스키마 변경 없음)로 결정 — XRP ~4s/XLM ~5-6s/SOL 0.4s 라 사이클당 2~25개로 여유(legacy 입금로직이 SOL 블록 스캔을 프로덕션에서 실증).
     - **SOL+SPL = 슬롯 범위 스캔 + 통합 러너(both-set ScanTarget 실사용)**: **tx-scanner 내부 상수** `UNIFIED_SCAN_PAIRS = [{assetId: SOL, tokenTypeId: SPL}]`(러너 구성=tx-scanner 책임이라 blockchain 상수로 노출하지 않음). tx-scanner 는 이 쌍의 코인/토큰 개별 러너를 만들지 않고 **러너 1개**(`createUnifiedRunner`) — 이유: 블록(getParsedBlock) 하나에 native delta(pre/postBalances)와 SPL delta(pre/postTokenBalances)가 함께 있어 한 번 파싱으로 두 종류 행 생성(각자 돌면 수 MB 블록을 이중 다운로드). legacy process_sol_deposit 도 같은 구조.
       - SolService.scanTransactions(addresses, cursor, **contractAddresses?=[]**): cursor=slot, head=getSlot(finalized), `getBlocks(from,to)` 로 존재 슬롯 → `getParsedBlock`(maxSupportedTransactionVersion 0, transactionDetails full, rewards false) **BLOCK_CHUNK=25 청크 병렬**. tx 마다: native §20 행(최대 감소=from, 양수 delta 각각 수신자 행, fee-payer∈watch 만 fee, 실패 tx fee 단독 행) + mint∈contractAddresses 인 SPL delta 행(contractAddress=mint, owner 합산, §20 동일, fee 없음 §14). getParsedBlock 실패는 throw → 사이클 재시도.
       - tx-scanner `createUnifiedRunner`: 저장 = 행의 contractAddress 유무로 분리(없으면 saveDetected(SOL), 있으면 saveDetectedTokens), 진행지점 = SOL 행 + SPL 토큰 행들 같은 값 갱신(§10). ScanRunner 는 both-set 이면 기존 토큰 분기(3-인자 호출) 재사용 — 코드 변경은 label 뿐.
@@ -200,7 +200,7 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
       - **amount = `meta.delivered_amount`(구 DeliveredAmount)** — string(native)만 신뢰. **partial payment(tfPartialPayment=0x00020000) 방어**: delivered 없고 partial 플래그 없을 때만 tx.Amount. (tx.Amount 로 크레딧하면 과다 지급 — 거래소 고전 공격 벡터.)
       - §14: Account∈watch 면 **모든 타입·실패(tec 도 ledger 포함+fee 소모) 기록**(status 0/amount 0), 수신은 성공 Payment+delivered>0 만. fee=tx.Fee(Account∈watch). **tx_index=`meta.TransactionIndex`**(결정적). memoId=DestinationTag.
       - `accountTx`(account_tx) 클라이언트 메서드 제거 → `getValidatedLedgerIndex`/`getLedgerTxs`. 라이브 검증(s1.ripple.com): ledger 105608342 수신 tx amount=delivered_amount(21912500)·txIndex=22 일치.
-      - monorepo 는 XRP 미등록 상태(§2) — **이 형태로 만들고 등록**하면 됨.
+      - **monorepo XRP 등록 완료**(2026-07-15, §22 반영과 함께 `BlockchainService` 등록) — 로스터 차이 해소.
     - **XLM = ledger 범위 payments 스캔**: ledger seq 마다 `/ledgers/{seq}/payments`(**금액·from·to 가 있는 operation 레벨** — tx 레벨엔 amount 없음) + `/ledgers/{seq}/transactions`(fee_charged·memo, hash 로 매핑) 조회, 페이지 루프(limit 200). cursor=ledger seq(head=최신 ledger). 과거 forAccount paging_token 방식의 유실·"계정 히스토리 처음부터" 문제 소멸, **amount 미기록 문제도 해소**.
       - op 파싱: `payment`/`path_payment_*`(asset_type==='native')=from/to/amount, `create_account`=funder→account/starting_balance. **`account_merge` 는 op 에 금액이 없어(effects 필요) 미지원 — TODO(개선 후보)**.
       - 금액 단위: Horizon 은 XLM 소수 문자열("12.5000000") → **stroops(×10^7) 정수로 변환해 raw**(BigNumber.shiftedBy(7).toFixed(0), rawDecimal=7 정합). fee 는 fee-payer(source)∈watch + **tx 당 첫 op 행에만**(중복 합산 방지). tx_index=tx 내 payment op 순번. status: Horizon 기본이 성공 tx 의 op 만 반환(include_failed=false).
@@ -213,6 +213,6 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
 - **DB 엔진 차이(monorepo=MySQL)**: 이 문서의 SQL 표기는 PostgreSQL 편의상 `ON CONFLICT DO NOTHING` 로 적지만, **monorepo 는 MySQL** 이라 실제로는 TypeORM `.orIgnore()`(= `INSERT IGNORE`)로 읽는다(동작 동일). unique index/DDL 문법도 MySQL 기준으로 옮길 것.
 - **SOL/SPL 통합 러너 — §22 로 구현됨**(prototype 2026-07-15): `UNIFIED_SCAN_PAIRS` both-set 러너 1개, 블록 스캔이라 ATA 열거 문제도 소멸(블록 meta 에 owner 가 직접 있음). monorepo 반영은 §22 참조.
 - **DB 트랜잭션 래핑(monorepo 전용)**: monorepo 는 `saveDetected`/`updateStartBlockNumber` 의 DB 쓰기를 `@InjectTransactionRunner(DATASOURCE_WALLET_SHORT_IDLE)` 의 `walletTransactionRunner.runInTransaction(...)` 으로 감싼다. prototype 은 stub repository(실 DB 없음)라 트랜잭션 래핑 없음 — **의도된 발산**(prototype 에 옮기지 않음).
-- **xrp**: prototype 로스터엔 있으나 monorepo `BlockchainService` **미등록**(추후 추가 예정) — 현재 유일한 로스터 차이.
+- **xrp**: ✅ monorepo 등록 완료(2026-07-15, §22 와 함께) — 로스터 완전 일치.
 - **nodeUrl**: prototype `nodeUrl` ≡ monorepo path 객체의 자산별 URL 필드(`host`/`gethUrl` 등) — 같은 의미(node RPC 주소)로 취급(§1).
 - **숫자값**: `AssetId`/`TokenTypeId` 값은 prototype 로컬값(monorepo 와 달라도 됨). 심볼만 `@gopax/proto` 와 일치(§2).
