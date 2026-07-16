@@ -235,6 +235,15 @@ prototype 로스터를 monorepo tx-scanner 기준으로 맞춤: native `konet/kl
       - 운영: 행 미존재 시 UPDATE 가 조용히 no-op — repository 를 upsert(INSERT … ON DUPLICATE KEY UPDATE)로 하거나 스캔 대상 id 전부(코인+토큰) 시드 필수.
     - **wallet_scanner_unspents**: 현행 유지(§17 설계 그대로 — tx_id 64/amount BIGINT UNSIGNED/인덱스 적정). charset 만 utf8mb4 로 통일 권장(wallet_scanner_asset 이 utf8 이던 것).
 
+25. **[구상·보류] 즉시 감지 + confirmation 파이프라인 (2026-07-16 구상만 — 미적용, 현행 semantics 유지)**. 현행 = safeHead 캡(head−threshold 까지만 스캔, 감지=확정)이라 confirmation 추적이 불필요한 대신 **감지가 threshold 만큼 늦음**(EVM 수십초~2분, TRX ~1분, BTC 30분, BCH 1시간). 대사(reconciliation) 타이밍을 위해 "감지 즉시 insert" 로 바꾸는 구상 — 적용해서 돌려보는 게 우선이라 보류, 나중에 수정.
+    - **모델**: head 까지 즉시 스캔 → `confirm_status=PENDING` 으로 insert → threshold 도달 시 확정 판정. threshold 역할이 "스캔 캡"→"확정 판정 기준"으로 이동(safeHead 캡 제거).
+    - **스키마**: `confirmations` 숫자 컬럼은 두지 않음(파생값 — 두면 pending 전 행을 매 사이클 UPDATE). 추가는 2개: `confirm_status TINYINT NOT NULL DEFAULT 1`(0=PENDING/1=CONFIRMED/2=ORPHANED — 기존 status(체인 성공/실패)와 분리) + `block_hash VARCHAR(66) NULL`(감지 시점 포함 블록 해시 — reorg 판정 근거).
+    - **confirmer(러너 사이클 2단계)**: PENDING 이고 `block_number <= head−threshold` 인 **distinct 블록**마다 현재 그 높이의 블록 해시 1콜 비교 — 일치→그 블록 PENDING 전부 CONFIRMED(tx 단위 조회 불필요, 블록당 1콜), 불일치(reorg)→tx 단위 재조회 → 새 블록에 재포함이면 block_number/block_hash 갱신+PENDING 유지, 미발견이면 **유예(재시도 N회) 후 ORPHANED**(mempool 복귀 후 재포함이 흔함 — 즉시 실패 금지. forward 재감지는 멱등 키에 눌리므로 confirmer 의 UPDATE 경로가 갱신 담당).
+    - **적용 대상**: reorg 가능 체인만 — EVM 4종/BTC/BCH/TRX/TRC20. 즉시최종(SOL/SPL finalized·SUI·XRP validated·XLM·XPLA)은 감지 즉시 CONFIRMED(지연도 이미 0 — 파이프라인 불통과).
+    - **설계 결정 2개**: ① unspents 원장 유지(maintainUnspents)는 **CONFIRMED 전이 시점에만**(PENDING 시점에 하면 reorg 롤백 필요 — forward-only 원장 유지). ② downstream(크레딧/대사)은 CONFIRMED 만 소비하는 계약 명시(PENDING="보이지만 아직 못 믿는" 행).
+    - **비용**: RPC=pending 블록당 해시 1콜(보통 1회), DB=행당 상태 전이 1회. blockchain 층 추가는 `getBlockHashAt(height)` 정도.
+    - **도입 순서(적용 시)**: EVM/TRX → UTXO(unspents 결합 포함) → 즉시최종은 CONFIRMED 명시만. main.asset.confirm_threshold 값 그대로 confirmer 기준으로 재사용.
+
 **주의/약속:**
 - **wallet-tx-scanner = 트랜잭션 스캐너(입출금 모두)**: "입금 감지"라는 표현이 문서 곳곳에 있으나, 실제로는 **감시 주소의 in/out tx 를 모두** 감지한다(출금=우리가 보낸 것 포함). fee_amount·실패tx 처리는 이 관점(§14) 기준.
 - **`scanBlocks` vs `scanTransactions`(monorepo)**: 둘 다 존재. **`scanBlocks`=기존 입금 로직 복사본(레거시, 우리 sync 대상 아님)**, **`scanTransactions`=wallet tx scanning(prototype↔monorepo 동기화 대상)**. 이 문서의 정합/TODO 는 전부 `scanTransactions` 기준. scanBlocks 는 semantic 참고용으로만 인용.
